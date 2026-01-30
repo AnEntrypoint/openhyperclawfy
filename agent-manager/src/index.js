@@ -1,134 +1,282 @@
-import Fastify from 'fastify'
-import cors from '@fastify/cors'
+import { WebSocketServer } from 'ws'
 import { nanoid } from 'nanoid'
-import { AgentRegistry } from './AgentRegistry.js'
 import { AgentConnection } from './AgentConnection.js'
+import { avatarLibrary, resolveAvatarRef } from './avatarLibrary.js'
 
 const PORT = process.env.AGENT_MANAGER_PORT || 5000
 const HYPERFY_WS_URL = process.env.HYPERFY_WS_URL || 'ws://localhost:4000/ws'
+const HYPERFY_API_URL = process.env.HYPERFY_API_URL || 'http://localhost:4000'
+const MAX_VRM_UPLOAD_SIZE = parseInt(process.env.MAX_VRM_UPLOAD_SIZE || '25', 10) * 1024 * 1024
 
-const registry = new AgentRegistry()
+const wss = new WebSocketServer({ port: PORT })
 
-const fastify = Fastify({ logger: true })
+function send(ws, type, payload = {}) {
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify({ type, ...payload }))
+  }
+}
 
-await fastify.register(cors)
+function sendError(ws, code, message) {
+  send(ws, 'error', { code, message })
+}
 
-// POST /agents — connect a new agent
-fastify.post('/agents', async (request, reply) => {
-  const { name } = request.body || {}
-  if (!name || typeof name !== 'string') {
-    return reply.status(400).send({ error: 'name is required (string)' })
-  }
+wss.on('connection', (ws) => {
+  let agent = null
 
-  const id = nanoid(12)
-  const agent = new AgentConnection(id, name)
-  registry.add(id, agent)
+  ws.on('message', async (raw) => {
+    let msg
+    try {
+      msg = JSON.parse(raw)
+    } catch {
+      sendError(ws, 'INVALID_COMMAND', 'Message must be valid JSON')
+      return
+    }
 
-  try {
-    await agent.connect(HYPERFY_WS_URL)
-    // Auto-start wandering and chatting
-    agent.startWander()
-    agent.startChat()
-    return { id: agent.id, name: agent.name, status: agent.status }
-  } catch (err) {
-    registry.remove(id)
-    return reply.status(500).send({ error: `Failed to connect agent: ${err.message}` })
-  }
-})
+    const { type } = msg
 
-// GET /agents — list all agents
-fastify.get('/agents', async () => {
-  return registry.list()
-})
+    switch (type) {
+      case 'spawn': {
+        if (agent) {
+          sendError(ws, 'ALREADY_SPAWNED', 'Agent already spawned on this connection')
+          return
+        }
+        const { name, avatar } = msg
+        if (!name || typeof name !== 'string') {
+          sendError(ws, 'INVALID_PARAMS', 'spawn requires { name: string }')
+          return
+        }
 
-// GET /agents/:id — get one agent
-fastify.get('/agents/:id', async (request, reply) => {
-  const agent = registry.get(request.params.id)
-  if (!agent) {
-    return reply.status(404).send({ error: 'Agent not found' })
-  }
-  return agent.toJSON()
-})
+        let resolvedAvatar = null
+        if (avatar) {
+          if (typeof avatar !== 'string') {
+            sendError(ws, 'INVALID_PARAMS', 'avatar must be a string (URL, asset:// ref, or library id)')
+            return
+          }
+          resolvedAvatar = resolveAvatarRef(avatar)
+          if (!resolvedAvatar) {
+            sendError(ws, 'INVALID_PARAMS', `Unknown avatar reference: ${avatar}`)
+            return
+          }
+        }
 
-// DELETE /agents/:id — disconnect agent
-fastify.delete('/agents/:id', async (request, reply) => {
-  const agent = registry.get(request.params.id)
-  if (!agent) {
-    return reply.status(404).send({ error: 'Agent not found' })
-  }
-  agent.disconnect()
-  registry.remove(request.params.id)
-  return { id: request.params.id, status: 'disconnected' }
-})
+        const id = nanoid(12)
+        agent = new AgentConnection(id, name, resolvedAvatar)
 
-// POST /agents/:id/speak — send chat message
-fastify.post('/agents/:id/speak', async (request, reply) => {
-  const agent = registry.get(request.params.id)
-  if (!agent) {
-    return reply.status(404).send({ error: 'Agent not found' })
-  }
-  const { text } = request.body || {}
-  if (!text || typeof text !== 'string') {
-    return reply.status(400).send({ error: 'text is required (string)' })
-  }
-  try {
-    agent.speak(text)
-    return { id: agent.id, action: 'speak', text }
-  } catch (err) {
-    return reply.status(400).send({ error: err.message })
-  }
-})
+        // Set callbacks before connect
+        agent.onWorldChat = (chatMsg) => {
+          // Filter out own messages
+          const playerId = agent.getPlayerId()
+          if (chatMsg.fromId === playerId) return
+          send(ws, 'chat', {
+            from: chatMsg.from,
+            fromId: chatMsg.fromId,
+            body: chatMsg.body,
+            id: chatMsg.id,
+            createdAt: chatMsg.createdAt,
+          })
+        }
 
-// POST /agents/:id/move — move agent
-fastify.post('/agents/:id/move', async (request, reply) => {
-  const agent = registry.get(request.params.id)
-  if (!agent) {
-    return reply.status(404).send({ error: 'Agent not found' })
-  }
-  const { direction, duration } = request.body || {}
-  if (!direction || typeof direction !== 'string') {
-    return reply.status(400).send({ error: 'direction is required (forward, backward, left, right, jump)' })
-  }
-  const durationMs = typeof duration === 'number' ? duration : 1000
-  try {
-    agent.move(direction, durationMs)
-    return { id: agent.id, action: 'move', direction, duration: durationMs }
-  } catch (err) {
-    return reply.status(400).send({ error: err.message })
-  }
-})
+        agent.onKick = (code) => {
+          send(ws, 'kicked', { code })
+          ws.close()
+        }
 
-// POST /agents/:id/wander — toggle wander on/off
-fastify.post('/agents/:id/wander', async (request, reply) => {
-  const agent = registry.get(request.params.id)
-  if (!agent) {
-    return reply.status(404).send({ error: 'Agent not found' })
-  }
-  const { enabled } = request.body || {}
-  if (enabled === false) {
-    agent.stopWander()
-  } else {
-    agent.startWander()
-  }
-  return { id: agent.id, wandering: agent._wandering }
+        agent.onDisconnect = () => {
+          send(ws, 'disconnected')
+          ws.close()
+        }
+
+        try {
+          await agent.connect(HYPERFY_WS_URL)
+          send(ws, 'spawned', { id: agent.id, name: agent.name, avatar: agent.avatar })
+        } catch (err) {
+          sendError(ws, 'SPAWN_FAILED', err.message)
+          agent = null
+        }
+        break
+      }
+
+      case 'speak': {
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        const { text } = msg
+        if (!text || typeof text !== 'string') {
+          sendError(ws, 'INVALID_PARAMS', 'speak requires { text: string }')
+          return
+        }
+        agent.speak(text)
+        break
+      }
+
+      case 'move': {
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        const { direction, duration } = msg
+        if (!direction || typeof direction !== 'string') {
+          sendError(ws, 'INVALID_PARAMS', 'move requires { direction: string }')
+          return
+        }
+        const durationMs = typeof duration === 'number' ? duration : 1000
+        try {
+          agent.move(direction, durationMs)
+        } catch (err) {
+          sendError(ws, 'INVALID_PARAMS', err.message)
+        }
+        break
+      }
+
+      case 'wander': {
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        const { enabled } = msg
+        if (enabled === false) {
+          agent.stopWander()
+        } else {
+          agent.startWander()
+        }
+        send(ws, 'wander_status', { enabled: agent._wandering })
+        break
+      }
+
+      case 'chat_auto': {
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        const { enabled } = msg
+        if (enabled === false) {
+          agent.stopChat()
+        } else {
+          agent.startChat()
+        }
+        send(ws, 'chat_auto_status', { enabled: agent._chatting })
+        break
+      }
+
+      case 'list_avatars': {
+        send(ws, 'avatar_library', { avatars: avatarLibrary })
+        break
+      }
+
+      case 'upload_avatar': {
+        const { data, filename } = msg
+        if (!data || typeof data !== 'string') {
+          sendError(ws, 'INVALID_PARAMS', 'upload_avatar requires { data: string (base64), filename: string }')
+          return
+        }
+        if (!filename || typeof filename !== 'string' || !filename.endsWith('.vrm')) {
+          sendError(ws, 'INVALID_PARAMS', 'filename must be a .vrm file')
+          return
+        }
+
+        let buffer
+        try {
+          buffer = Buffer.from(data, 'base64')
+        } catch {
+          sendError(ws, 'INVALID_PARAMS', 'data must be valid base64')
+          return
+        }
+
+        if (buffer.length > MAX_VRM_UPLOAD_SIZE) {
+          sendError(ws, 'INVALID_PARAMS', `VRM file exceeds max size of ${MAX_VRM_UPLOAD_SIZE / (1024 * 1024)}MB`)
+          return
+        }
+
+        // Validate GLB magic bytes (VRM is a GLB container)
+        if (buffer.length < 12) {
+          sendError(ws, 'INVALID_PARAMS', 'File too small to be a valid VRM')
+          return
+        }
+        const magic = buffer.readUInt32LE(0)
+        if (magic !== 0x46546C67) { // 'glTF'
+          sendError(ws, 'INVALID_PARAMS', 'Invalid VRM file: missing glTF magic bytes')
+          return
+        }
+        const version = buffer.readUInt32LE(4)
+        if (version !== 2) {
+          sendError(ws, 'INVALID_PARAMS', 'Invalid VRM file: must be glTF version 2')
+          return
+        }
+
+        try {
+          // Build multipart form data and POST to Hyperfy upload endpoint
+          const boundary = '----VRMUpload' + Date.now()
+          const header = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`
+          const footer = `\r\n--${boundary}--\r\n`
+          const headerBuf = Buffer.from(header)
+          const footerBuf = Buffer.from(footer)
+          const body = Buffer.concat([headerBuf, buffer, footerBuf])
+
+          const res = await fetch(`${HYPERFY_API_URL}/api/avatar/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+            body,
+          })
+
+          if (!res.ok) {
+            const text = await res.text()
+            sendError(ws, 'UPLOAD_FAILED', `Upload failed: ${res.status} ${text}`)
+            return
+          }
+
+          const result = await res.json()
+          send(ws, 'avatar_uploaded', { url: result.url, hash: result.hash })
+        } catch (err) {
+          sendError(ws, 'UPLOAD_FAILED', `Upload failed: ${err.message}`)
+        }
+        break
+      }
+
+      case 'ping': {
+        send(ws, 'pong')
+        break
+      }
+
+      default: {
+        sendError(ws, 'INVALID_COMMAND', `Unknown command: ${type}`)
+      }
+    }
+  })
+
+  ws.on('close', () => {
+    if (agent) {
+      agent.disconnect()
+      agent = null
+    }
+  })
+
+  ws.on('error', (err) => {
+    console.error('WebSocket error:', err.message)
+    if (agent) {
+      agent.disconnect()
+      agent = null
+    }
+  })
 })
 
 // Graceful shutdown
-const shutdown = async () => {
+const shutdown = () => {
   console.log('Shutting down agent-manager...')
-  registry.disconnectAll()
-  await fastify.close()
-  process.exit(0)
+  for (const client of wss.clients) {
+    client.close()
+  }
+  wss.close(() => {
+    process.exit(0)
+  })
 }
 
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
 
-try {
-  await fastify.listen({ port: PORT, host: '0.0.0.0' })
-  console.log(`Agent manager listening on port ${PORT}`)
-  console.log(`Hyperfy WebSocket URL: ${HYPERFY_WS_URL}`)
-} catch (err) {
-  fastify.log.error(err)
-  process.exit(1)
-}
+console.log(`Agent manager WebSocket server listening on port ${PORT}`)
+console.log(`Hyperfy WebSocket URL: ${HYPERFY_WS_URL}`)

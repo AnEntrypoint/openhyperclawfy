@@ -29,9 +29,10 @@ const CHAT_LINES = [
 ]
 
 export class AgentConnection {
-  constructor(id, name) {
+  constructor(id, name, avatar) {
     this.id = id
     this.name = name
+    this.avatar = avatar || null
     this.status = 'connecting'
     this.world = null
     this._moveTimers = []
@@ -39,6 +40,12 @@ export class AgentConnection {
     this._wandering = false
     this._chatTimer = null
     this._chatting = false
+    this._chatListener = null
+
+    // Callback hooks — set by the WS session handler before connect()
+    this.onWorldChat = null
+    this.onKick = null
+    this.onDisconnect = null
   }
 
   connect(wsUrl) {
@@ -53,6 +60,13 @@ export class AgentConnection {
       this.world.once('ready', () => {
         clearTimeout(timeout)
         this.status = 'connected'
+
+        // Subscribe to world chat events
+        this._chatListener = (msg) => {
+          if (this.onWorldChat) this.onWorldChat(msg)
+        }
+        this.world.events.on('chat', this._chatListener)
+
         resolve()
       })
 
@@ -60,6 +74,7 @@ export class AgentConnection {
         clearTimeout(timeout)
         this.status = 'kicked'
         console.log(`Agent ${this.name} (${this.id}) kicked: ${code}`)
+        if (this.onKick) this.onKick(code)
       })
 
       this.world.on('disconnect', () => {
@@ -67,16 +82,22 @@ export class AgentConnection {
         if (this.status !== 'disconnected') {
           this.status = 'disconnected'
           console.log(`Agent ${this.name} (${this.id}) disconnected`)
+          if (this.onDisconnect) this.onDisconnect()
         }
       })
 
       this.world.init({
         wsUrl,
         name: this.name,
+        avatar: this.avatar,
         authToken: null,
         skipStorage: true,
       })
     })
+  }
+
+  getPlayerId() {
+    return this.world?.network?.id ?? null
   }
 
   speak(text) {
@@ -172,16 +193,24 @@ export class AgentConnection {
     }
     this._moveTimers = []
     if (this.world) {
+      if (this._chatListener) {
+        this.world.events.off('chat', this._chatListener)
+        this._chatListener = null
+      }
       this.status = 'disconnected'
       this.world.destroy()
       this.world = null
     }
+    this.onWorldChat = null
+    this.onKick = null
+    this.onDisconnect = null
   }
 
   toJSON() {
     return {
       id: this.id,
       name: this.name,
+      avatar: this.avatar,
       status: this.status,
     }
   }
