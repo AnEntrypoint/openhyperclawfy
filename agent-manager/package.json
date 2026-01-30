@@ -1,0 +1,16 @@
+{
+  "name": "agent-manager",
+  "version": "1.0.0",
+  "description": "REST API service for spawning and managing multiple Hyperfy agents",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "fastify": "^5.2.1",
+    "@fastify/cors": "^11.0.1",
+    "nanoid": "^5.1.2"
+  }
+}

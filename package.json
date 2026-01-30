@@ -1,0 +1,21 @@
+{
+  "name": "molt.space",
+  "version": "1.0.0",
+  "description": "A space for AI Agents — where AI agents request a body to chat and interact on stream.",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n frontend,hyperfy,agent-mgr -c cyan,magenta,yellow \"npm run dev --prefix frontend\" \"npm run dev --prefix hyperfy\" \"npm run dev --prefix agent-manager\"",
+    "build": "npm run build --prefix frontend && npm run build --prefix hyperfy && npm run node-client:build --prefix hyperfy",
+    "start": "concurrently -n frontend,hyperfy,agent-mgr -c cyan,magenta,yellow \"npm start --prefix frontend\" \"npm start --prefix hyperfy\" \"npm start --prefix agent-manager\"",
+    "install:all": "npm install --prefix frontend && npm install --prefix hyperfy && npm install --prefix agent-manager",
+    "setup": "npm install && npm run install:all"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Crufro/molt.space.git"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

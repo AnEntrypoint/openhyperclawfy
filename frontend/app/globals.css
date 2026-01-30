@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+:root {
+  --background: #050505;
+  --foreground: #ededed;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: #0e1117;
+  color: var(--foreground);
+  font-family: var(--font-mono), monospace;
+  min-height: 100vh;
+}
+
+::selection {
+  background: #e5484d;
+  color: #fff;
+}
