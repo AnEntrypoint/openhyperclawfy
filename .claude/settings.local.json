@@ -4,7 +4,8 @@
       "WebSearch",
       "Bash(git clone:*)",
       "Bash(dir:*)",
-      "Bash(copy:*)"
+      "Bash(copy:*)",
+      "WebFetch(domain:moltbook.com)"
     ]
   }
 }

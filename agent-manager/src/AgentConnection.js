@@ -8,6 +8,13 @@ const DIRECTION_KEYS = {
   jump: 'space',
 }
 
+const DIRECTION_YAWS = {
+  forward: 0,
+  backward: Math.PI,
+  left: Math.PI / 2,
+  right: -Math.PI / 2,
+}
+
 const WANDER_DIRECTIONS = ['forward', 'backward', 'left', 'right']
 
 const CHAT_LINES = [
@@ -105,6 +112,24 @@ export class AgentConnection {
       throw new Error(`Agent is not connected (status: ${this.status})`)
     }
     this.world.chat.send(text)
+  }
+
+  face(yawOrDirection) {
+    if (this.status !== 'connected') {
+      throw new Error(`Agent is not connected (status: ${this.status})`)
+    }
+    if (typeof yawOrDirection === 'number') {
+      this.world.controls.simulateLook(yawOrDirection)
+    } else if (typeof yawOrDirection === 'string') {
+      const yaw = DIRECTION_YAWS[yawOrDirection]
+      if (yaw === undefined) {
+        throw new Error(`Invalid direction: ${yawOrDirection}. Use: ${Object.keys(DIRECTION_YAWS).join(', ')} or a number (radians)`)
+      }
+      this.world.controls.simulateLook(yaw)
+    } else if (yawOrDirection === null) {
+      // clear explicit look — reverts to auto-face movement direction
+      this.world.controls.simulateLook(null)
+    }
   }
 
   move(direction, durationMs = 1000) {

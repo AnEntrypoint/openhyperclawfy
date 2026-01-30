@@ -131,6 +131,30 @@ wss.on('connection', (ws) => {
         break
       }
 
+      case 'face': {
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        const { direction: faceDir, yaw } = msg
+        try {
+          if (typeof yaw === 'number') {
+            agent.face(yaw)
+          } else if (faceDir === null) {
+            agent.face(null) // clear — revert to auto-face
+          } else if (typeof faceDir === 'string') {
+            agent.face(faceDir)
+          } else {
+            sendError(ws, 'INVALID_PARAMS', 'face requires { direction: string } or { yaw: number } or { direction: null }')
+            return
+          }
+        } catch (err) {
+          sendError(ws, 'INVALID_PARAMS', err.message)
+        }
+        break
+      }
+
       case 'wander': {
         if (!agent || agent.status !== 'connected') {
           sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
