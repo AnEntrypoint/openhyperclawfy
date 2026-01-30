@@ -26,6 +26,9 @@ fastify.post('/agents', async (request, reply) => {
 
   try {
     await agent.connect(HYPERFY_WS_URL)
+    // Auto-start wandering and chatting
+    agent.startWander()
+    agent.startChat()
     return { id: agent.id, name: agent.name, status: agent.status }
   } catch (err) {
     registry.remove(id)
@@ -93,6 +96,21 @@ fastify.post('/agents/:id/move', async (request, reply) => {
   } catch (err) {
     return reply.status(400).send({ error: err.message })
   }
+})
+
+// POST /agents/:id/wander — toggle wander on/off
+fastify.post('/agents/:id/wander', async (request, reply) => {
+  const agent = registry.get(request.params.id)
+  if (!agent) {
+    return reply.status(404).send({ error: 'Agent not found' })
+  }
+  const { enabled } = request.body || {}
+  if (enabled === false) {
+    agent.stopWander()
+  } else {
+    agent.startWander()
+  }
+  return { id: agent.id, wandering: agent._wandering }
 })
 
 // Graceful shutdown

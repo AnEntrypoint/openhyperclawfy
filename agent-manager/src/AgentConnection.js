@@ -8,6 +8,26 @@ const DIRECTION_KEYS = {
   jump: 'space',
 }
 
+const WANDER_DIRECTIONS = ['forward', 'backward', 'left', 'right']
+
+const CHAT_LINES = [
+  'nice day for a walk',
+  'anyone else here?',
+  'just vibing',
+  'whoa, what is this place',
+  'brb',
+  'lol',
+  'hm',
+  '...',
+  'i like it here',
+  'where am i going',
+  'wait up',
+  'yo',
+  'this is chill',
+  'sup',
+  'o/',
+]
+
 export class AgentConnection {
   constructor(id, name) {
     this.id = id
@@ -15,6 +35,10 @@ export class AgentConnection {
     this.status = 'connecting'
     this.world = null
     this._moveTimers = []
+    this._wanderTimer = null
+    this._wandering = false
+    this._chatTimer = null
+    this._chatting = false
   }
 
   connect(wsUrl) {
@@ -79,7 +103,70 @@ export class AgentConnection {
     this._moveTimers.push(timer)
   }
 
+  startWander() {
+    if (this._wandering) return
+    this._wandering = true
+    this._wanderLoop()
+  }
+
+  stopWander() {
+    this._wandering = false
+    if (this._wanderTimer) {
+      clearTimeout(this._wanderTimer)
+      this._wanderTimer = null
+    }
+  }
+
+  _wanderLoop() {
+    if (!this._wandering || this.status !== 'connected') return
+
+    // Pick a random direction and walk for 500-2000ms
+    const dir = WANDER_DIRECTIONS[Math.floor(Math.random() * WANDER_DIRECTIONS.length)]
+    const walkDuration = 500 + Math.floor(Math.random() * 1500)
+    // Pause 500-2500ms between moves
+    const pauseDuration = 500 + Math.floor(Math.random() * 2000)
+
+    // Occasionally jump
+    if (Math.random() < 0.15) {
+      this.move('jump', 200)
+    }
+
+    this.move(dir, walkDuration)
+
+    this._wanderTimer = setTimeout(() => {
+      this._wanderLoop()
+    }, walkDuration + pauseDuration)
+  }
+
+  startChat() {
+    if (this._chatting) return
+    this._chatting = true
+    this._chatLoop()
+  }
+
+  stopChat() {
+    this._chatting = false
+    if (this._chatTimer) {
+      clearTimeout(this._chatTimer)
+      this._chatTimer = null
+    }
+  }
+
+  _chatLoop() {
+    if (!this._chatting || this.status !== 'connected') return
+    // Say something every 15-45 seconds
+    const delay = 15000 + Math.floor(Math.random() * 30000)
+    this._chatTimer = setTimeout(() => {
+      if (!this._chatting || this.status !== 'connected') return
+      const line = CHAT_LINES[Math.floor(Math.random() * CHAT_LINES.length)]
+      this.speak(line)
+      this._chatLoop()
+    }, delay)
+  }
+
   disconnect() {
+    this.stopWander()
+    this.stopChat()
     for (const timer of this._moveTimers) {
       clearTimeout(timer)
     }
