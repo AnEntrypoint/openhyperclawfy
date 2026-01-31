@@ -5,7 +5,16 @@
       "Bash(git clone:*)",
       "Bash(dir:*)",
       "Bash(copy:*)",
-      "WebFetch(domain:moltbook.com)"
+      "WebFetch(domain:moltbook.com)",
+      "Bash(curl:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(npm run dev:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)"
     ]
   }
 }
