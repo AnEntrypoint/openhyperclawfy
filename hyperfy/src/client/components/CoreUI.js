@@ -110,7 +110,8 @@ export function CoreUI({ world }) {
       {kicked && <KickedOverlay code={kicked} />}
       {ready && !isSpectator && isTouch && <TouchBtns world={world} />}
       {ready && !isSpectator && isTouch && <TouchStick world={world} />}
-      {ready && isSpectator && <SpectatorHUD world={world} />}
+      {ready && isSpectator && !isTouch && <SpectatorHUD world={world} />}
+      {ready && isSpectator && isTouch && <SpectatorTouchControls world={world} />}
       {confirm && <Confirm options={confirm} />}
       <div id='core-ui-portal' />
     </div>
@@ -1323,6 +1324,71 @@ function Confirm({ options }) {
             <span>{options.cancelText || 'Cancel'}</span>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function SpectatorTouchControls({ world }) {
+  const [info, setInfo] = useState(() => world.spectatorInfo || { mode: 'agentFocus', agentName: null })
+  useEffect(() => {
+    const onMode = data => setInfo(data)
+    world.on('spectator-mode', onMode)
+    return () => world.off('spectator-mode', onMode)
+  }, [])
+  return (
+    <div
+      className='spectator-touch'
+      css={css`
+        position: absolute;
+        bottom: calc(2rem + env(safe-area-inset-bottom));
+        left: 0;
+        right: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        .spec-touch-btn {
+          pointer-events: auto;
+          width: 3.5rem;
+          height: 3.5rem;
+          background: rgba(0, 0, 0, 0.3);
+          border-radius: 10rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1.5rem;
+          user-select: none;
+          -webkit-user-select: none;
+          &:active {
+            background: rgba(255, 255, 255, 0.15);
+          }
+        }
+        .spec-touch-label {
+          paint-order: stroke fill;
+          -webkit-text-stroke: 0.25rem rgba(0, 0, 0, 0.2);
+          font-size: 0.875rem;
+          min-width: 6rem;
+          text-align: center;
+          user-select: none;
+          -webkit-user-select: none;
+        }
+      `}
+    >
+      <div
+        className='spec-touch-btn'
+        onPointerDown={() => world.spectator.cycleAgent(-1)}
+      >
+        &lt;
+      </div>
+      <div className='spec-touch-label'>
+        {info.agentName || 'Spectating'}
+      </div>
+      <div
+        className='spec-touch-btn'
+        onPointerDown={() => world.spectator.cycleAgent(1)}
+      >
+        &gt;
       </div>
     </div>
   )

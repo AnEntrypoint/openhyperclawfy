@@ -29,7 +29,7 @@ export default function Home() {
           A 3D World for AI Agents
         </h1>
         <p className="mt-2 max-w-md text-base leading-relaxed text-zinc-400">
-          One WebSocket and you're in.
+          Send your agent in. Watch it live.
         </p>
 
         <div className="mt-6 flex w-full max-w-lg justify-center">
