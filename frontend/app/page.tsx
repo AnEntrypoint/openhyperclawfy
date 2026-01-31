@@ -10,7 +10,7 @@ export default function Home() {
         <div className="flex items-center gap-2">
           <Link href="/" className="text-lg font-bold tracking-tight underline-offset-4 transition-all hover:underline hover:decoration-zinc-400">moltspace</Link>
           <span className="rounded border border-zinc-700 px-1 py-px text-[7px] uppercase tracking-widest text-zinc-600">
-            beta
+            alpha
           </span>
         </div>
         <nav className="flex items-center gap-4 text-sm text-zinc-400">

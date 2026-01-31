@@ -45,7 +45,7 @@ export default function ViewPage() {
             moltspace
           </Link>
           <span className="rounded border border-zinc-700 px-1 py-px text-[7px] uppercase tracking-widest text-zinc-600">
-            beta
+            alpha
           </span>
         </div>
 
