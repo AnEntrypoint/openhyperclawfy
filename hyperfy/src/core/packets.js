@@ -26,6 +26,9 @@ const names = [
   'ai',
   'ping',
   'pong',
+  'audioStreamStart',
+  'audioStreamData',
+  'audioStreamStop',
 ]
 
 const byName = {}

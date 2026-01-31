@@ -220,6 +220,18 @@ export class ClientNetwork extends System {
     this.world.livekit?.setMuted(data.playerId, data.muted)
   }
 
+  onAudioStreamStart = data => {
+    this.world.audioStream?.handleStart(data)
+  }
+
+  onAudioStreamData = data => {
+    this.world.audioStream?.handleData(data)
+  }
+
+  onAudioStreamStop = data => {
+    this.world.audioStream?.handleStop(data)
+  }
+
   onPong = time => {
     this.world.stats?.onPong(time)
   }

@@ -904,7 +904,54 @@ function sendError(ws, code, message) {
 wss.on('connection', (ws) => {
   let agentId = null
 
-  ws.on('message', async (raw) => {
+  ws.on('message', async (raw, isBinary) => {
+    // Track activity for inactivity timeout
+    if (agentId) {
+      const session = agentSessions.get(agentId)
+      if (session) session.lastActivity = Date.now()
+    }
+
+    // Handle binary frames (audio streaming)
+    if (isBinary) {
+      if (!agentId) {
+        sendError(ws, 'SPAWN_REQUIRED', 'Send spawn first')
+        return
+      }
+      const session = agentSessions.get(agentId)
+      const agent = session?.agent
+      if (!agent || agent.status !== 'connected') {
+        sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+          agent ? 'Agent is not connected' : 'Send spawn first')
+        return
+      }
+
+      const buf = Buffer.from(raw)
+      if (buf.length < 1) return
+      const cmd = buf[0]
+
+      if (cmd === 0x01) {
+        // audio_start: rest is JSON
+        try {
+          const json = JSON.parse(buf.slice(1).toString('utf-8'))
+          const streamId = agent.startAudioStream(json)
+          send(ws, 'audio_started', { streamId })
+        } catch (err) {
+          sendError(ws, 'AUDIO_ERROR', err.message)
+        }
+      } else if (cmd === 0x02) {
+        // audio_data: bytes 1-4 = uint32LE seq, bytes 5+ = PCM samples
+        if (buf.length < 6) return
+        const seq = buf.readUInt32LE(1)
+        const samples = buf.slice(5)
+        agent.pushAudioData(seq, samples)
+      } else if (cmd === 0x03) {
+        // audio_stop
+        agent.stopAudioStream()
+        send(ws, 'audio_stopped')
+      }
+      return
+    }
+
     let msg
     try {
       msg = JSON.parse(raw)
@@ -914,12 +961,6 @@ wss.on('connection', (ws) => {
     }
 
     const { type } = msg
-
-    // Track activity for inactivity timeout
-    if (agentId) {
-      const session = agentSessions.get(agentId)
-      if (session) session.lastActivity = Date.now()
-    }
 
     switch (type) {
       case 'spawn': {
@@ -1332,6 +1373,47 @@ wss.on('connection', (ws) => {
         } catch (err) {
           sendError(ws, 'UPLOAD_FAILED', `Upload failed: ${err.message}`)
         }
+        break
+      }
+
+      case 'audio_start': {
+        const session = agentSessions.get(agentId)
+        const agent = session?.agent
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        const { sampleRate, channels, format } = msg
+        try {
+          const streamId = agent.startAudioStream({ sampleRate, channels, format })
+          send(ws, 'audio_started', { streamId })
+        } catch (err) {
+          sendError(ws, 'AUDIO_ERROR', err.message)
+        }
+        break
+      }
+
+      case 'audio_data': {
+        const session = agentSessions.get(agentId)
+        const agent = session?.agent
+        if (!agent || agent.status !== 'connected') return
+        const { samples: b64Samples, seq: audioSeq } = msg
+        if (!b64Samples || typeof b64Samples !== 'string') {
+          sendError(ws, 'INVALID_PARAMS', 'audio_data requires { samples: string (base64) }')
+          return
+        }
+        const audioBuffer = Buffer.from(b64Samples, 'base64')
+        agent.pushAudioData(audioSeq, audioBuffer)
+        break
+      }
+
+      case 'audio_stop': {
+        const session = agentSessions.get(agentId)
+        const agent = session?.agent
+        if (!agent) return
+        agent.stopAudioStream()
+        send(ws, 'audio_stopped')
         break
       }
 

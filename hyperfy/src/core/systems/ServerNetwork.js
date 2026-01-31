@@ -613,8 +613,23 @@ export class ServerNetwork extends System {
     socket.send('pong', time)
   }
 
+  onAudioStreamStart = (socket, data) => {
+    console.log('[network] onAudioStreamStart received from', socket.id)
+    this.world.audioStream.handleStreamStart(socket, data)
+  }
+
+  onAudioStreamData = (socket, data) => {
+    this.world.audioStream.handleStreamData(socket, data)
+  }
+
+  onAudioStreamStop = (socket, data) => {
+    console.log('[network] onAudioStreamStop received from', socket.id)
+    this.world.audioStream.handleStreamStop(socket, data)
+  }
+
   onDisconnect = (socket, code) => {
     this.world.livekit.clearModifiers(socket.id)
+    this.world.audioStream?.cleanupSocket(socket.id)
     if (socket.player) {
       socket.player.destroy(true)
     }

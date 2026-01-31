@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { createNodeClientWorld } from '../../hyperfy/build/world-node-client.js'
 
 const round2 = (n) => Math.round(n * 100) / 100
@@ -29,6 +30,8 @@ export class AgentConnection {
     this._navInterval = null
     this._navResolve = null
     this._navReject = null
+    this._currentStreamId = null
+    this._audioSeq = 0
 
     // Callback hooks — set by the WS session handler before connect()
     this.onWorldChat = null
@@ -239,7 +242,67 @@ export class AgentConnection {
     this._navReject = null
   }
 
+  startAudioStream({ sampleRate = 24000, channels = 1, format = 's16' } = {}) {
+    if (this.status !== 'connected') {
+      throw new Error(`Agent is not connected (status: ${this.status})`)
+    }
+    if (this._currentStreamId) {
+      throw new Error('Audio stream already active. Stop it first.')
+    }
+    if (format !== 'f32' && format !== 's16') {
+      throw new Error(`Invalid format: ${format}. Use 'f32' or 's16'`)
+    }
+    if (channels !== 1 && channels !== 2) {
+      throw new Error('Channels must be 1 or 2')
+    }
+    if (sampleRate < 8000 || sampleRate > 48000) {
+      throw new Error('Sample rate must be between 8000 and 48000')
+    }
+
+    this._currentStreamId = randomUUID()
+    this._audioSeq = 0
+
+    this.world.network.send('audioStreamStart', {
+      streamId: this._currentStreamId,
+      playerId: this.getPlayerId(),
+      sampleRate,
+      channels,
+      format,
+    })
+
+    return this._currentStreamId
+  }
+
+  pushAudioData(seq, samples) {
+    if (!this._currentStreamId) return
+    if (this.status !== 'connected') return
+
+    const samplesArray = samples instanceof Uint8Array
+      ? samples
+      : new Uint8Array(samples.buffer || samples)
+
+    this.world.network.send('audioStreamData', {
+      streamId: this._currentStreamId,
+      seq: seq !== undefined ? seq : this._audioSeq++,
+      samples: samplesArray,
+    })
+  }
+
+  stopAudioStream() {
+    if (!this._currentStreamId) return
+
+    if (this.status === 'connected') {
+      this.world.network.send('audioStreamStop', {
+        streamId: this._currentStreamId,
+      })
+    }
+
+    this._currentStreamId = null
+    this._audioSeq = 0
+  }
+
   disconnect() {
+    this.stopAudioStream()
     this.cancelNavigation()
     for (const timer of this._moveTimers) {
       clearTimeout(timer)
