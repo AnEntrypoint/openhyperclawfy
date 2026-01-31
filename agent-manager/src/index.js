@@ -13,6 +13,8 @@ const HYPERFY_API_URL = process.env.HYPERFY_API_URL || 'http://localhost:4000'
 const MAX_VRM_UPLOAD_SIZE = parseInt(process.env.MAX_VRM_UPLOAD_SIZE || '25', 10) * 1024 * 1024
 const INACTIVITY_TTL = 5 * 60 * 1000 // 5 min inactivity for all agents
 const MAX_BODY_SIZE = 1 * 1024 * 1024   // 1MB request body limit
+const MAX_CHAT_LENGTH = 500              // max characters in a chat message
+const MAX_NAME_LENGTH = 32               // max characters in an agent name
 
 // ---------------------------------------------------------------------------
 // Global agent registry
@@ -51,6 +53,18 @@ function resolveDisplayName(name, agentId) {
 }
 
 // ---------------------------------------------------------------------------
+// Resolve fromId → displayName for chat messages
+// ---------------------------------------------------------------------------
+function resolveFromName(fromId, fallback) {
+  for (const [, session] of agentSessions) {
+    if (session.agent.getPlayerId() === fromId) {
+      return session.displayName
+    }
+  }
+  return fallback
+}
+
+// ---------------------------------------------------------------------------
 // Speak text validation
 // ---------------------------------------------------------------------------
 function validateSpeakText(text) {
@@ -61,27 +75,41 @@ function validateSpeakText(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Spawn name validation
+// ---------------------------------------------------------------------------
+function validateName(name) {
+  if (!name || typeof name !== 'string') return 'spawn requires { name: string }'
+  if (name.length > MAX_NAME_LENGTH) return `Name too long (max ${MAX_NAME_LENGTH} characters)`
+  if (/<|>/.test(name)) return 'Name cannot contain < or > characters'
+  return null
+}
+
+// ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = []
     let size = 0
+    let rejected = false
     req.on('data', (chunk) => {
       size += chunk.length
       if (size > MAX_BODY_SIZE) {
-        reject(new Error('Request body too large'))
-        req.destroy()
+        if (!rejected) {
+          rejected = true
+          reject(new Error('Request body too large'))
+        }
         return
       }
-      chunks.push(chunk)
+      if (!rejected) chunks.push(chunk)
     })
     req.on('end', () => {
+      if (rejected) return
       const raw = Buffer.concat(chunks).toString('utf-8')
       if (!raw) { resolve({}); return }
       try { resolve(JSON.parse(raw)) } catch { reject(new Error('Invalid JSON body')) }
     })
-    req.on('error', reject)
+    req.on('error', (err) => { if (!rejected) reject(err) })
   })
 }
 
@@ -89,19 +117,23 @@ function readTextBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = []
     let size = 0
+    let rejected = false
     req.on('data', (chunk) => {
       size += chunk.length
       if (size > MAX_BODY_SIZE) {
-        reject(new Error('Request body too large'))
-        req.destroy()
+        if (!rejected) {
+          rejected = true
+          reject(new Error('Request body too large'))
+        }
         return
       }
-      chunks.push(chunk)
+      if (!rejected) chunks.push(chunk)
     })
     req.on('end', () => {
+      if (rejected) return
       resolve(Buffer.concat(chunks).toString('utf-8'))
     })
-    req.on('error', reject)
+    req.on('error', (err) => { if (!rejected) reject(err) })
   })
 }
 
@@ -113,14 +145,34 @@ function parseTextCommand(line) {
   if (!trimmed) return null
 
   // say <text>
+  if (trimmed === 'say') {
+    return { action: 'speak', text: '' }
+  }
   if (trimmed.startsWith('say ')) {
     return { action: 'speak', text: trimmed.slice(4) }
   }
 
+  // move (bare — no direction)
+  if (trimmed === 'move') {
+    return { action: 'move', direction: '', duration: 1000 }
+  }
+
   // move <direction> [duration]
-  const moveMatch = trimmed.match(/^move\s+(\w+)(?:\s+(\d+))?$/)
+  const moveMatch = trimmed.match(/^move\s+(\w+)(?:\s+(\S+))?$/)
   if (moveMatch) {
-    return { action: 'move', direction: moveMatch[1], duration: parseInt(moveMatch[2]) || 1000 }
+    if (!moveMatch[2]) {
+      return { action: 'move', direction: moveMatch[1], duration: 1000 }
+    }
+    const parsed = Number(moveMatch[2])
+    if (!Number.isInteger(parsed)) {
+      return { action: 'move_error', error: 'Duration must be a whole number in milliseconds' }
+    }
+    return { action: 'move', direction: moveMatch[1], duration: parsed }
+  }
+
+  // face / look (bare — no direction)
+  if (trimmed === 'face' || trimmed === 'look') {
+    return { action: 'face', direction: '' }
   }
 
   // face <direction|yaw|auto> (also accepts "look")
@@ -133,6 +185,7 @@ function parseTextCommand(line) {
     return { action: 'face', direction: val }
   }
 
+  if (trimmed === 'who') return { action: 'who' }
   if (trimmed === 'ping') return { action: 'ping' }
   if (trimmed === 'despawn') return { action: 'despawn' }
 
@@ -147,6 +200,7 @@ const SESSION_COMMANDS = [
   'move forward|backward|left|right|jump [ms]',
   'face <direction|yaw|auto>',
   'look <direction|yaw|auto>',
+  'who',
   'ping',
   'despawn',
 ]
@@ -157,6 +211,7 @@ function executeCommand(session, cmd) {
   switch (cmd.action) {
     case 'speak': {
       if (!cmd.text) return { ok: false, error: 'say requires text' }
+      if (cmd.text.length > MAX_CHAT_LENGTH) return { ok: false, error: `Message too long (max ${MAX_CHAT_LENGTH} characters)` }
       if (agent.status !== 'connected') return { ok: false, error: `Agent not connected (${agent.status})` }
       const warning = validateSpeakText(cmd.text)
       agent.speak(cmd.text)
@@ -164,8 +219,14 @@ function executeCommand(session, cmd) {
       if (warning) result.warning = warning
       return result
     }
+    case 'move_error': {
+      return { ok: false, error: cmd.error }
+    }
     case 'move': {
+      if (!cmd.direction) return { ok: false, error: 'move requires a direction (forward, backward, left, right, jump)' }
       if (agent.status !== 'connected') return { ok: false, error: `Agent not connected (${agent.status})` }
+      if (cmd.duration <= 0) return { ok: false, error: 'Duration must be positive (1-10000ms)' }
+      if (cmd.duration > 10000) return { ok: false, error: 'Duration cannot exceed 10000ms' }
       try {
         agent.move(cmd.direction, cmd.duration)
       } catch (err) {
@@ -174,17 +235,29 @@ function executeCommand(session, cmd) {
       return { ok: true, action: 'move', direction: cmd.direction, duration: cmd.duration }
     }
     case 'face': {
+      if (cmd.direction === '') return { ok: false, error: 'face requires a direction, yaw, or auto' }
+      if (typeof cmd.yaw === 'number' && !Number.isFinite(cmd.yaw)) return { ok: false, error: 'yaw must be a finite number' }
       if (agent.status !== 'connected') return { ok: false, error: `Agent not connected (${agent.status})` }
       try {
         if (typeof cmd.yaw === 'number') {
           agent.face(cmd.yaw)
+          return { ok: true, action: 'face', yaw: cmd.yaw }
         } else {
           agent.face(cmd.direction ?? null)
+          return { ok: true, action: 'face', direction: cmd.direction ?? 'auto' }
         }
       } catch (err) {
         return { ok: false, error: err.message }
       }
-      return { ok: true, action: 'face' }
+    }
+    case 'who': {
+      const agents = []
+      for (const [id, s] of agentSessions) {
+        if (s.agent.status === 'connected') {
+          agents.push({ displayName: s.displayName, id, playerId: s.agent.getPlayerId() })
+        }
+      }
+      return { ok: true, action: 'who', agents }
     }
     case 'ping': {
       return { ok: true, action: 'pong', agentStatus: agent.status }
@@ -227,6 +300,7 @@ function authenticate(req) {
 // ---------------------------------------------------------------------------
 async function resolveAndProxyAvatar(avatarRef) {
   let resolvedAvatar = null
+  let warning = null
   if (avatarRef) {
     if (typeof avatarRef !== 'string') {
       throw new Error('avatar must be a string (URL, asset:// ref, or library id)')
@@ -241,10 +315,11 @@ async function resolveAndProxyAvatar(avatarRef) {
       resolvedAvatar = await proxyAvatar(resolvedAvatar)
     } catch (err) {
       console.warn(`Avatar proxy failed for ${resolvedAvatar}: ${err.message}, using default`)
+      warning = `Avatar failed to load: ${err.message}. Using default avatar.`
       resolvedAvatar = null
     }
   }
-  return resolvedAvatar
+  return { url: resolvedAvatar, warning }
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +370,13 @@ async function handleHttpRequest(req, res) {
 
       // POST with body → parse plaintext commands
       if (method === 'POST') {
-        const body = await readTextBody(req)
+        let body
+        try {
+          body = await readTextBody(req)
+        } catch (err) {
+          sendJson(res, 400, { ok: false, error: err.message })
+          return
+        }
         if (body) {
           const lines = body.split('\n')
           for (const line of lines) {
@@ -345,16 +426,25 @@ async function handleHttpRequest(req, res) {
 
     // ---- Spawn (HTTP) ----
     if (method === 'POST' && path === '/api/spawn') {
-      const body = await readBody(req)
+      let body
+      try {
+        body = await readBody(req)
+      } catch (err) {
+        sendJson(res, 400, { error: 'INVALID_JSON', message: err.message })
+        return
+      }
       const { name, avatar } = body
-      if (!name || typeof name !== 'string') {
-        sendJson(res, 400, { error: 'INVALID_PARAMS', message: 'spawn requires { name: string }' })
+      const nameError = validateName(name)
+      if (nameError) {
+        sendJson(res, 400, { error: 'INVALID_PARAMS', message: nameError })
         return
       }
 
-      let resolvedAvatar
+      let resolvedAvatar, avatarWarning
       try {
-        resolvedAvatar = await resolveAndProxyAvatar(avatar)
+        const result = await resolveAndProxyAvatar(avatar)
+        resolvedAvatar = result.url
+        avatarWarning = result.warning
       } catch (err) {
         sendJson(res, 400, { error: 'INVALID_PARAMS', message: err.message })
         return
@@ -372,7 +462,7 @@ async function handleHttpRequest(req, res) {
         if (chatMsg.fromId === playerId) return
         eventBuffer.push({
           type: 'chat',
-          from: chatMsg.from,
+          from: resolveFromName(chatMsg.fromId, chatMsg.from),
           fromId: chatMsg.fromId,
           body: chatMsg.body,
           id: chatMsg.id,
@@ -410,14 +500,16 @@ async function handleHttpRequest(req, res) {
       tokenIndex.set(token, id)
 
       console.log(`HTTP agent spawned: ${name} (${id}) displayName=${displayName}`)
-      sendJson(res, 201, {
+      const spawnResponse = {
         id,
         token,
         session: `http://${req.headers.host || `localhost:${PORT}`}/s/${token}`,
         name: agent.name,
         displayName,
         avatar: agent.avatar,
-      })
+      }
+      if (avatarWarning) spawnResponse.warning = avatarWarning
+      sendJson(res, 201, spawnResponse)
       return
     }
 
@@ -469,10 +561,20 @@ async function handleHttpRequest(req, res) {
 
       // ---- POST /api/agents/:id/speak ----
       if (method === 'POST' && action === 'speak') {
-        const body = await readBody(req)
+        let body
+        try {
+          body = await readBody(req)
+        } catch (err) {
+          sendJson(res, 400, { error: 'INVALID_JSON', message: err.message })
+          return
+        }
         const { text } = body
         if (!text || typeof text !== 'string') {
           sendJson(res, 400, { error: 'INVALID_PARAMS', message: 'speak requires { text: string }' })
+          return
+        }
+        if (text.length > MAX_CHAT_LENGTH) {
+          sendJson(res, 400, { error: 'INVALID_PARAMS', message: `Message too long (max ${MAX_CHAT_LENGTH} characters)` })
           return
         }
         const warning = validateSpeakText(text)
@@ -485,13 +587,27 @@ async function handleHttpRequest(req, res) {
 
       // ---- POST /api/agents/:id/move ----
       if (method === 'POST' && action === 'move') {
-        const body = await readBody(req)
+        let body
+        try {
+          body = await readBody(req)
+        } catch (err) {
+          sendJson(res, 400, { error: 'INVALID_JSON', message: err.message })
+          return
+        }
         const { direction, duration } = body
         if (!direction || typeof direction !== 'string') {
           sendJson(res, 400, { error: 'INVALID_PARAMS', message: 'move requires { direction: string }' })
           return
         }
         const durationMs = typeof duration === 'number' ? duration : 1000
+        if (durationMs <= 0) {
+          sendJson(res, 400, { error: 'INVALID_PARAMS', message: 'Duration must be positive (1-10000ms)' })
+          return
+        }
+        if (durationMs > 10000) {
+          sendJson(res, 400, { error: 'INVALID_PARAMS', message: 'Duration cannot exceed 10000ms' })
+          return
+        }
         try {
           agent.move(direction, durationMs)
         } catch (err) {
@@ -504,15 +620,28 @@ async function handleHttpRequest(req, res) {
 
       // ---- POST /api/agents/:id/face ----
       if (method === 'POST' && action === 'face') {
-        const body = await readBody(req)
+        let body
+        try {
+          body = await readBody(req)
+        } catch (err) {
+          sendJson(res, 400, { error: 'INVALID_JSON', message: err.message })
+          return
+        }
         const { direction, yaw } = body
+        if (typeof yaw === 'number' && !Number.isFinite(yaw)) {
+          sendJson(res, 400, { error: 'INVALID_PARAMS', message: 'yaw must be a finite number' })
+          return
+        }
         try {
           if (typeof yaw === 'number') {
             agent.face(yaw)
+            sendJson(res, 200, { status: 'facing', yaw })
           } else if (direction === null) {
             agent.face(null)
+            sendJson(res, 200, { status: 'facing', direction: 'auto' })
           } else if (typeof direction === 'string') {
             agent.face(direction)
+            sendJson(res, 200, { status: 'facing', direction })
           } else {
             sendJson(res, 400, { error: 'INVALID_PARAMS', message: 'face requires { direction: string } or { yaw: number } or { direction: null }' })
             return
@@ -521,7 +650,6 @@ async function handleHttpRequest(req, res) {
           sendJson(res, 400, { error: 'INVALID_PARAMS', message: err.message })
           return
         }
-        sendJson(res, 200, { status: 'facing' })
         return
       }
 
@@ -598,14 +726,17 @@ wss.on('connection', (ws) => {
           return
         }
         const { name, avatar } = msg
-        if (!name || typeof name !== 'string') {
-          sendError(ws, 'INVALID_PARAMS', 'spawn requires { name: string }')
+        const nameError = validateName(name)
+        if (nameError) {
+          sendError(ws, 'INVALID_PARAMS', nameError)
           return
         }
 
-        let resolvedAvatar
+        let resolvedAvatar, avatarWarning
         try {
-          resolvedAvatar = await resolveAndProxyAvatar(avatar)
+          const result = await resolveAndProxyAvatar(avatar)
+          resolvedAvatar = result.url
+          avatarWarning = result.warning
         } catch (err) {
           sendError(ws, 'INVALID_PARAMS', err.message)
           return
@@ -620,7 +751,7 @@ wss.on('connection', (ws) => {
           const playerId = agent.getPlayerId()
           if (chatMsg.fromId === playerId) return
           send(ws, 'chat', {
-            from: chatMsg.from,
+            from: resolveFromName(chatMsg.fromId, chatMsg.from),
             fromId: chatMsg.fromId,
             body: chatMsg.body,
             id: chatMsg.id,
@@ -660,7 +791,9 @@ wss.on('connection', (ws) => {
         agentSessions.set(id, session)
 
         console.log(`WS agent spawned: ${name} (${id}) displayName=${displayName}`)
-        send(ws, 'spawned', { id: agent.id, name: agent.name, displayName, avatar: agent.avatar })
+        const spawnedPayload = { id: agent.id, name: agent.name, displayName, avatar: agent.avatar }
+        if (avatarWarning) spawnedPayload.warning = avatarWarning
+        send(ws, 'spawned', spawnedPayload)
         break
       }
 
@@ -677,11 +810,16 @@ wss.on('connection', (ws) => {
           sendError(ws, 'INVALID_PARAMS', 'speak requires { text: string }')
           return
         }
+        if (text.length > MAX_CHAT_LENGTH) {
+          sendError(ws, 'INVALID_PARAMS', `Message too long (max ${MAX_CHAT_LENGTH} characters)`)
+          return
+        }
         const warning = validateSpeakText(text)
         if (warning) {
           send(ws, 'warning', { message: warning })
         }
         agent.speak(text)
+        send(ws, 'speak', { text })
         break
       }
 
@@ -699,8 +837,17 @@ wss.on('connection', (ws) => {
           return
         }
         const durationMs = typeof duration === 'number' ? duration : 1000
+        if (durationMs <= 0) {
+          sendError(ws, 'INVALID_PARAMS', 'Duration must be positive (1-10000ms)')
+          return
+        }
+        if (durationMs > 10000) {
+          sendError(ws, 'INVALID_PARAMS', 'Duration cannot exceed 10000ms')
+          return
+        }
         try {
           agent.move(direction, durationMs)
+          send(ws, 'move', { direction, duration: durationMs })
         } catch (err) {
           sendError(ws, 'INVALID_PARAMS', err.message)
         }
@@ -716,13 +863,20 @@ wss.on('connection', (ws) => {
           return
         }
         const { direction: faceDir, yaw } = msg
+        if (typeof yaw === 'number' && !Number.isFinite(yaw)) {
+          sendError(ws, 'INVALID_PARAMS', 'yaw must be a finite number')
+          return
+        }
         try {
           if (typeof yaw === 'number') {
             agent.face(yaw)
+            send(ws, 'face', { yaw })
           } else if (faceDir === null) {
             agent.face(null)
+            send(ws, 'face', { direction: 'auto' })
           } else if (typeof faceDir === 'string') {
             agent.face(faceDir)
+            send(ws, 'face', { direction: faceDir })
           } else {
             sendError(ws, 'INVALID_PARAMS', 'face requires { direction: string } or { yaw: number } or { direction: null }')
             return
@@ -730,6 +884,17 @@ wss.on('connection', (ws) => {
         } catch (err) {
           sendError(ws, 'INVALID_PARAMS', err.message)
         }
+        break
+      }
+
+      case 'who': {
+        const agents = []
+        for (const [id, s] of agentSessions) {
+          if (s.agent.status === 'connected') {
+            agents.push({ displayName: s.displayName, id, playerId: s.agent.getPlayerId() })
+          }
+        }
+        send(ws, 'who', { agents })
         break
       }
 
