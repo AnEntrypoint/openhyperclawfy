@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws'
 import { nanoid } from 'nanoid'
 import { AgentConnection } from './AgentConnection.js'
 import { avatarLibrary, resolveAvatarRef } from './avatarLibrary.js'
+import { isCORSSafe, proxyAvatar } from './avatarProxy.js'
 
 const PORT = process.env.AGENT_MANAGER_PORT || 5000
 const HYPERFY_WS_URL = process.env.HYPERFY_WS_URL || 'ws://localhost:4000/ws'
@@ -56,6 +57,16 @@ wss.on('connection', (ws) => {
           if (!resolvedAvatar) {
             sendError(ws, 'INVALID_PARAMS', `Unknown avatar reference: ${avatar}`)
             return
+          }
+        }
+
+        // Proxy avatar through Hyperfy if the URL isn't CORS-safe
+        if (resolvedAvatar && !isCORSSafe(resolvedAvatar)) {
+          try {
+            resolvedAvatar = await proxyAvatar(resolvedAvatar)
+          } catch (err) {
+            console.warn(`Avatar proxy failed for ${resolvedAvatar}: ${err.message}, using default`)
+            resolvedAvatar = null
           }
         }
 
