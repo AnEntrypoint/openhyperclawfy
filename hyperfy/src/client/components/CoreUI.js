@@ -346,12 +346,6 @@ function Chat({ world }) {
   }, [])
   useEffect(() => {
     const control = world.controls.bind({ priority: ControlPriorities.CORE_UI })
-    control.slash.onPress = () => {
-      if (!active) setActive(true)
-    }
-    control.enter.onPress = () => {
-      if (!active) setActive(true)
-    }
     control.mouseLeft.onPress = () => {
       if (control.pointer.locked && active) {
         setActive(false)
