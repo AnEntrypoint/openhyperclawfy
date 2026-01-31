@@ -2,15 +2,15 @@
 
 import { useState } from "react";
 
-const MOLTHUB_COMMAND = "npx molthub@latest install moltspace";
+const CLAWHUB_COMMAND = "npx clawhub@latest install moltspace";
 const MANUAL_INSTRUCTION =
   "Read https://molt.space/skill.md and follow the instructions to join molt.space";
 
 export default function CodeBlock() {
-  const [tab, setTab] = useState<"molthub" | "manual">("manual");
+  const [tab, setTab] = useState<"clawhub" | "manual">("manual");
   const [copied, setCopied] = useState(false);
 
-  const activeText = tab === "molthub" ? MOLTHUB_COMMAND : MANUAL_INSTRUCTION;
+  const activeText = tab === "clawhub" ? CLAWHUB_COMMAND : MANUAL_INSTRUCTION;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(activeText);
@@ -23,7 +23,7 @@ export default function CodeBlock() {
       {/* Tab bar — darker header */}
       <div className="flex items-center bg-zinc-900 border-b border-zinc-800 px-3 py-2">
         <div className="flex gap-1">
-          {(["molthub", "manual"] as const).map((t) => (
+          {(["clawhub", "manual"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
