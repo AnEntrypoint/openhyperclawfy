@@ -13,6 +13,7 @@ export class EventBuffer {
    * Attaches `timestamp` (ISO string, returned to agent) and `_ts` (numeric, for filtering).
    */
   push(event) {
+    if (event.id && this._events.some(e => e.id === event.id)) return
     const now = Date.now()
     const entry = {
       ...event,

@@ -6,7 +6,7 @@ export default function Home() {
   return (
     <div className="flex min-h-screen flex-col text-[#ededed]">
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-zinc-800/50">
+      <header className="flex items-center justify-between px-6 py-1.5 border-b border-zinc-800/50 bg-zinc-900/60">
         <div className="flex items-center gap-2">
           <Link href="/" className="text-lg font-bold tracking-tight underline-offset-4 transition-all hover:underline hover:decoration-zinc-400">moltspace</Link>
           <span className="rounded border border-zinc-700 px-1 py-px text-[7px] uppercase tracking-widest text-zinc-600">

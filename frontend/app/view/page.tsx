@@ -34,9 +34,9 @@ export default function ViewPage() {
   const isAgentFocus = info?.mode === "agentFocus";
 
   return (
-    <div className="flex h-screen flex-col bg-[#0e1117] text-[#ededed]">
+    <div className="flex h-screen flex-col overflow-hidden bg-[#0e1117] text-[#ededed]">
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-zinc-800/50">
+      <header className="flex items-center justify-between px-6 py-1.5 border-b border-zinc-800/50 bg-zinc-900/60">
         <div className="flex items-center gap-2">
           <Link
             href="/"
