@@ -30,6 +30,7 @@ export class AgentConnection {
     this._navInterval = null
     this._navResolve = null
     this._navReject = null
+    this._navRunning = false
     this._currentStreamId = null
     this._audioSeq = 0
 
@@ -131,7 +132,7 @@ export class AgentConnection {
     }
   }
 
-  move(direction, durationMs = 1000) {
+  move(direction, durationMs = 1000, run = false) {
     if (this.status !== 'connected') {
       throw new Error(`Agent is not connected (status: ${this.status})`)
     }
@@ -140,16 +141,18 @@ export class AgentConnection {
     if (!key) {
       throw new Error(`Invalid direction: ${direction}. Use: ${Object.keys(DIRECTION_KEYS).join(', ')}`)
     }
+    if (run) this.world.controls.simulateButton('shiftLeft', true)
     this.world.controls.simulateButton(key, true)
     const timer = setTimeout(() => {
       this.world.controls.simulateButton(key, false)
+      if (run) this.world.controls.simulateButton('shiftLeft', false)
       const idx = this._moveTimers.indexOf(timer)
       if (idx !== -1) this._moveTimers.splice(idx, 1)
     }, durationMs)
     this._moveTimers.push(timer)
   }
 
-  navigateTo(targetX, targetZ, { arrivalRadius = 2.0, timeout = 30000, getTargetPos = null } = {}) {
+  navigateTo(targetX, targetZ, { arrivalRadius = 2.0, timeout = 30000, getTargetPos = null, run = false } = {}) {
     if (this.status !== 'connected') {
       return Promise.reject(new Error(`Agent is not connected (status: ${this.status})`))
     }
@@ -159,6 +162,7 @@ export class AgentConnection {
     return new Promise((resolve) => {
       const startTime = Date.now()
       this._navResolve = resolve
+      this._navRunning = run
 
       const tick = () => {
         const pos = this.getPosition()
@@ -187,6 +191,7 @@ export class AgentConnection {
         if (distance <= arrivalRadius) {
           // Stop moving
           this.world.controls.simulateButton('keyW', false)
+          if (run) this.world.controls.simulateButton('shiftLeft', false)
           this.world.controls.simulateLook(null)
           this._cleanupNav()
           resolve({ arrived: true, position: pos, distance: round2(distance) })
@@ -196,15 +201,17 @@ export class AgentConnection {
         // Timeout?
         if (Date.now() - startTime > timeout) {
           this.world.controls.simulateButton('keyW', false)
+          if (run) this.world.controls.simulateButton('shiftLeft', false)
           this.world.controls.simulateLook(null)
           this._cleanupNav()
           resolve({ arrived: false, position: pos, distance: round2(distance), error: 'Navigation timeout' })
           return
         }
 
-        // Face toward target and walk forward
+        // Face toward target and walk/run forward
         const yaw = Math.atan2(-dx, -dz)
         this.world.controls.simulateLook(yaw)
+        if (run) this.world.controls.simulateButton('shiftLeft', true)
         this.world.controls.simulateButton('keyW', true)
       }
 
@@ -220,14 +227,16 @@ export class AgentConnection {
       this._navInterval = null
     }
     if (this._navResolve) {
-      // Release W key and restore auto-face
+      // Release W key, shift, and restore auto-face
       if (this.world && this.status === 'connected') {
         this.world.controls.simulateButton('keyW', false)
+        if (this._navRunning) this.world.controls.simulateButton('shiftLeft', false)
         this.world.controls.simulateLook(null)
       }
       const resolve = this._navResolve
       this._navResolve = null
       this._navReject = null
+      this._navRunning = false
       const pos = this.getPosition()
       resolve({ arrived: false, position: pos, distance: null, error: 'Cancelled' })
     }
@@ -308,6 +317,10 @@ export class AgentConnection {
       clearTimeout(timer)
     }
     this._moveTimers = []
+    // Release shift in case a run-move timer is still pending
+    if (this.world && this.status === 'connected') {
+      this.world.controls.simulateButton('shiftLeft', false)
+    }
     if (this.world) {
       if (this._chatListener) {
         this.world.events.off('chat', this._chatListener)

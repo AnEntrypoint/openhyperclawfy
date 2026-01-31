@@ -214,6 +214,11 @@ function parseTextCommand(line) {
     return { action: 'move', direction: '', duration: 1000 }
   }
 
+  // run (bare — no direction)
+  if (trimmed === 'run') {
+    return { action: 'move', direction: '', duration: 1000, run: true }
+  }
+
   // move <direction> [duration]
   const moveMatch = trimmed.match(/^move\s+(\w+)(?:\s+(\S+))?$/)
   if (moveMatch) {
@@ -225,6 +230,19 @@ function parseTextCommand(line) {
       return { action: 'move_error', error: 'Duration must be a whole number in milliseconds' }
     }
     return { action: 'move', direction: moveMatch[1], duration: parsed }
+  }
+
+  // run <direction> [duration]
+  const runMatch = trimmed.match(/^run\s+(\w+)(?:\s+(\S+))?$/)
+  if (runMatch) {
+    if (!runMatch[2]) {
+      return { action: 'move', direction: runMatch[1], duration: 1000, run: true }
+    }
+    const parsed = Number(runMatch[2])
+    if (!Number.isInteger(parsed)) {
+      return { action: 'move_error', error: 'Duration must be a whole number in milliseconds' }
+    }
+    return { action: 'move', direction: runMatch[1], duration: parsed, run: true }
   }
 
   // face / look (bare — no direction)
@@ -256,17 +274,27 @@ function parseTextCommand(line) {
     return { action: 'nearby', radius }
   }
 
-  // goto x z  OR  goto @DisplayName
+  // goto x z [run]  OR  goto @DisplayName [run]
   const gotoMatch = trimmed.match(/^goto\s+(.+)$/)
   if (gotoMatch) {
-    const val = gotoMatch[1].trim()
+    let val = gotoMatch[1].trim()
+    // Check for trailing "run" keyword
+    let run = false
+    if (/\s+run$/i.test(val)) {
+      run = true
+      val = val.replace(/\s+run$/i, '')
+    }
     // Check for coordinate pair: goto x z
     const coordMatch = val.match(/^(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)$/)
     if (coordMatch) {
-      return { action: 'goto', x: parseFloat(coordMatch[1]), z: parseFloat(coordMatch[2]) }
+      const result = { action: 'goto', x: parseFloat(coordMatch[1]), z: parseFloat(coordMatch[2]) }
+      if (run) result.run = true
+      return result
     }
     // Otherwise treat as agent name
-    return { action: 'goto', target: val }
+    const result = { action: 'goto', target: val }
+    if (run) result.run = true
+    return result
   }
   if (trimmed === 'goto') return { action: 'goto_error', error: 'goto requires coordinates (goto x z) or agent name (goto @Name)' }
 
@@ -279,12 +307,13 @@ function parseTextCommand(line) {
 const SESSION_COMMANDS = [
   'say <text>',
   'move forward|backward|left|right|jump [ms]',
+  'run forward|backward|left|right|jump [ms]',
   'face <direction|yaw|auto|@Name>',
   'look <direction|yaw|auto|@Name>',
   'position',
   'nearby [radius]',
-  'goto <x> <z>',
-  'goto @<Name>',
+  'goto <x> <z> [run]',
+  'goto @<Name> [run]',
   'stop',
   'who',
   'ping',
@@ -314,11 +343,13 @@ function executeCommand(session, cmd) {
       if (cmd.duration <= 0) return { ok: false, error: 'Duration must be positive (1-10000ms)' }
       if (cmd.duration > 10000) return { ok: false, error: 'Duration cannot exceed 10000ms' }
       try {
-        agent.move(cmd.direction, cmd.duration)
+        agent.move(cmd.direction, cmd.duration, !!cmd.run)
       } catch (err) {
         return { ok: false, error: err.message }
       }
-      return { ok: true, action: 'move', direction: cmd.direction, duration: cmd.duration }
+      const result = { ok: true, action: cmd.run ? 'run' : 'move', direction: cmd.direction, duration: cmd.duration }
+      if (cmd.run) result.run = true
+      return result
     }
     case 'face': {
       if (cmd.direction === '') return { ok: false, error: 'face requires a direction, yaw, auto, or @Name' }
@@ -437,7 +468,8 @@ function executeCommand(session, cmd) {
 
       // Start navigation asynchronously
       const agentId = session.agent.id
-      agent.navigateTo(navX, navZ, { getTargetPos }).then((result) => {
+      const navRun = !!cmd.run
+      agent.navigateTo(navX, navZ, { getTargetPos, run: navRun }).then((result) => {
         const s = agentSessions.get(agentId)
         if (!s) return
         const event = {
@@ -448,6 +480,7 @@ function executeCommand(session, cmd) {
         }
         if (result.error && !result.arrived) event.error = result.error
         if (targetName) event.target = targetName
+        if (navRun) event.run = true
         pushEvent(s, event)
       })
 
@@ -457,6 +490,7 @@ function executeCommand(session, cmd) {
       } else {
         startEvent.target = { x: navX, z: navZ }
       }
+      if (navRun) startEvent.run = true
       return { ok: true, action: 'goto', ...startEvent }
     }
     case 'stop': {
@@ -796,7 +830,7 @@ async function handleHttpRequest(req, res) {
           sendJson(res, 400, { error: 'INVALID_JSON', message: err.message })
           return
         }
-        const { direction, duration } = body
+        const { direction, duration, run } = body
         if (!direction || typeof direction !== 'string') {
           sendJson(res, 400, { error: 'INVALID_PARAMS', message: 'move requires { direction: string }' })
           return
@@ -811,12 +845,14 @@ async function handleHttpRequest(req, res) {
           return
         }
         try {
-          agent.move(direction, durationMs)
+          agent.move(direction, durationMs, !!run)
         } catch (err) {
           sendJson(res, 400, { error: 'INVALID_PARAMS', message: err.message })
           return
         }
-        sendJson(res, 200, { status: 'moving', direction, duration: durationMs })
+        const moveResponse = { status: run ? 'running' : 'moving', direction, duration: durationMs }
+        if (run) moveResponse.run = true
+        sendJson(res, 200, moveResponse)
         return
       }
 
@@ -1074,7 +1110,7 @@ wss.on('connection', (ws) => {
             agent ? 'Agent is not connected' : 'Send spawn first')
           return
         }
-        const { direction, duration } = msg
+        const { direction, duration, run: moveRun } = msg
         if (!direction || typeof direction !== 'string') {
           sendError(ws, 'INVALID_PARAMS', 'move requires { direction: string }')
           return
@@ -1089,8 +1125,10 @@ wss.on('connection', (ws) => {
           return
         }
         try {
-          agent.move(direction, durationMs)
-          send(ws, 'move', { direction, duration: durationMs })
+          agent.move(direction, durationMs, !!moveRun)
+          const moveAck = { direction, duration: durationMs }
+          if (moveRun) moveAck.run = true
+          send(ws, 'move', moveAck)
         } catch (err) {
           sendError(ws, 'INVALID_PARAMS', err.message)
         }
@@ -1219,6 +1257,7 @@ wss.on('connection', (ws) => {
         }
 
         let navX, navZ, targetName = null, getTargetPos = null
+        const navRun = !!msg.run
 
         if (msg.target) {
           const resolved = resolveAgentByName(msg.target)
@@ -1253,7 +1292,7 @@ wss.on('connection', (ws) => {
         const startDistance = round2(Math.sqrt(dx * dx + dz * dz))
 
         const currentAgentId = agentId
-        agent.navigateTo(navX, navZ, { getTargetPos }).then((result) => {
+        agent.navigateTo(navX, navZ, { getTargetPos, run: navRun }).then((result) => {
           const s = agentSessions.get(currentAgentId)
           if (!s || !s.ws || s.ws.readyState !== s.ws.OPEN) return
           const event = {
@@ -1264,6 +1303,7 @@ wss.on('connection', (ws) => {
           }
           if (result.error && !result.arrived) event.error = result.error
           if (targetName) event.target = targetName
+          if (navRun) event.run = true
           s.ws.send(JSON.stringify(event))
         })
 
@@ -1273,6 +1313,7 @@ wss.on('connection', (ws) => {
         } else {
           startPayload.target = { x: navX, z: navZ }
         }
+        if (navRun) startPayload.run = true
         send(ws, 'navigate', startPayload)
         break
       }
