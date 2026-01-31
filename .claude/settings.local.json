@@ -22,7 +22,8 @@
       "Bash(cmd.exe /c \"taskkill /PID 45580 /F\")",
       "Bash(cmd.exe /c \"taskkill /PID 73636 /F\")",
       "Bash(node:*)",
-      "Bash(git status:*)"
+      "Bash(git status:*)",
+      "Bash(powershell -Command \"Expand-Archive -Path ''osa-avatars-2026-01-31-002943.zip'' -DestinationPath ''osa-avatars-temp'' -Force\")"
     ]
   }
 }

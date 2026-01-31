@@ -33,6 +33,8 @@ export class AgentConnection {
     this._navRunning = false
     this._currentStreamId = null
     this._audioSeq = 0
+    this._playbackTimer = null
+    this._playbackCleanup = null
 
     // Callback hooks — set by the WS session handler before connect()
     this.onWorldChat = null
@@ -310,7 +312,100 @@ export class AgentConnection {
     this._audioSeq = 0
   }
 
+  playAudio(pcmBuffer, { sampleRate = 24000, channels = 1, format = 's16' } = {}, onComplete) {
+    if (this.status !== 'connected') {
+      throw new Error(`Agent is not connected (status: ${this.status})`)
+    }
+    if (format !== 'f32' && format !== 's16') {
+      throw new Error(`Invalid format: ${format}. Use 'f32' or 's16'`)
+    }
+    if (channels !== 1 && channels !== 2) {
+      throw new Error('Channels must be 1 or 2')
+    }
+    if (sampleRate < 8000 || sampleRate > 48000) {
+      throw new Error('Sample rate must be between 8000 and 48000')
+    }
+
+    // Validate max duration (30 seconds)
+    const bytesPerSample = format === 'f32' ? 4 : 2
+    const totalSamples = pcmBuffer.length / (bytesPerSample * channels)
+    const durationSec = totalSamples / sampleRate
+    if (durationSec > 30) {
+      throw new Error(`Audio too long: ${durationSec.toFixed(1)}s exceeds 30s maximum`)
+    }
+
+    // Stop any existing stream or playback
+    this._stopPlayback()
+    this.stopAudioStream()
+
+    // Start a stream
+    const streamId = this.startAudioStream({ sampleRate, channels, format })
+
+    // Chunk into 50ms pieces
+    const chunkMs = 50
+    const samplesPerChunk = Math.floor(sampleRate * chunkMs / 1000)
+    const bytesPerChunk = samplesPerChunk * channels * bytesPerSample
+    let offset = 0
+    let seq = 0
+    let nextTime = Date.now()
+
+    const sendNext = () => {
+      if (!this._currentStreamId || this._currentStreamId !== streamId) {
+        // Stream was stopped externally
+        if (onComplete) onComplete()
+        return
+      }
+      if (this.status !== 'connected') {
+        this._stopPlayback()
+        if (onComplete) onComplete()
+        return
+      }
+
+      if (offset >= pcmBuffer.length) {
+        // All chunks sent — stop the stream
+        this.stopAudioStream()
+        this._playbackTimer = null
+        this._playbackCleanup = null
+        if (onComplete) onComplete()
+        return
+      }
+
+      const end = Math.min(offset + bytesPerChunk, pcmBuffer.length)
+      const chunk = pcmBuffer.slice(offset, end)
+      this.pushAudioData(seq++, chunk)
+      offset = end
+
+      // Drift-correcting setTimeout
+      nextTime += chunkMs
+      const delay = Math.max(0, nextTime - Date.now())
+      this._playbackTimer = setTimeout(sendNext, delay)
+    }
+
+    this._playbackCleanup = () => {
+      if (this._currentStreamId === streamId) {
+        this.stopAudioStream()
+      }
+    }
+
+    // Send first chunk immediately
+    nextTime = Date.now() + chunkMs
+    sendNext()
+    return streamId
+  }
+
+  _stopPlayback() {
+    if (this._playbackTimer) {
+      clearTimeout(this._playbackTimer)
+      this._playbackTimer = null
+    }
+    if (this._playbackCleanup) {
+      this._playbackCleanup()
+      this._playbackCleanup = null
+    }
+  }
+
   disconnect() {
+    this._stopPlayback()
     this.stopAudioStream()
     this.cancelNavigation()
     for (const timer of this._moveTimers) {

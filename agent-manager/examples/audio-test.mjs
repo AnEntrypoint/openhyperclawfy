@@ -1,13 +1,18 @@
 /**
- * Audio streaming test: spawns an agent, waits 3 seconds, then streams
- * a generated sine wave tone as spatial audio.
+ * Audio test: spawns an agent, waits 3 seconds, then plays audio.
+ *
+ * Default mode uses `audio_play` (one-shot) — sends the entire buffer and
+ * lets the agent-manager handle pacing.  Use `--stream` to test the
+ * advanced streaming protocol instead.
  *
  * If ffmpeg is available and an MP3 path is provided, it will decode and
- * stream that instead.
+ * play that instead of a generated sine wave.
  *
  * Usage:
- *   node agent-manager/examples/audio-test.mjs
- *   node agent-manager/examples/audio-test.mjs path/to/file.mp3
+ *   node agent-manager/examples/audio-test.mjs                       # one-shot sine wave
+ *   node agent-manager/examples/audio-test.mjs path/to/file.mp3      # one-shot MP3
+ *   node agent-manager/examples/audio-test.mjs --stream               # streaming sine wave
+ *   node agent-manager/examples/audio-test.mjs --stream path/to/file.mp3
  *
  * Prerequisites:
  *   - Hyperfy server running on port 4000
@@ -95,7 +100,36 @@ function createAgent(name) {
   })
 }
 
-// Stream PCM data using binary frames
+// One-shot playback via audio_play (JSON)
+function playAudioOneShot(agent, pcmData) {
+  const ws = agent.ws
+  const durationSec = (pcmData.length / SAMPLE_RATE / CHANNELS / 2).toFixed(1)
+  console.log(`Playing ${durationSec}s of audio via audio_play (one-shot)...`)
+
+  ws.send(JSON.stringify({
+    type: 'audio_play',
+    samples: pcmData.toString('base64'),
+    sampleRate: SAMPLE_RATE,
+    channels: CHANNELS,
+    format: 's16',
+  }))
+}
+
+// One-shot playback via audio_play (binary, more efficient)
+function playAudioOneShotBinary(agent, pcmData) {
+  const ws = agent.ws
+  const durationSec = (pcmData.length / SAMPLE_RATE / CHANNELS / 2).toFixed(1)
+  console.log(`Playing ${durationSec}s of audio via audio_play binary (one-shot)...`)
+
+  const json = JSON.stringify({ sampleRate: SAMPLE_RATE, channels: CHANNELS, format: 's16' })
+  const jsonBuf = Buffer.from(json)
+  const header = Buffer.alloc(5)
+  header[0] = 0x04
+  header.writeUInt32LE(jsonBuf.length, 1)
+  ws.send(Buffer.concat([header, jsonBuf, pcmData]))
+}
+
+// Stream PCM data using binary frames (advanced)
 async function streamAudio(agent, pcmData) {
   const ws = agent.ws
 
@@ -111,6 +145,7 @@ async function streamAudio(agent, pcmData) {
 
   let offset = 0
   let seq = 0
+  let nextTime = Date.now()
 
   while (offset < pcmData.length) {
     const end = Math.min(offset + CHUNK_BYTES, pcmData.length)
@@ -126,7 +161,10 @@ async function streamAudio(agent, pcmData) {
     offset = end
     seq++
 
-    await sleep(CHUNK_MS)
+    // Drift-correcting sleep
+    nextTime += CHUNK_MS
+    const delay = Math.max(0, nextTime - Date.now())
+    await sleep(delay)
   }
 
   // Stop stream: binary cmd 0x03
@@ -136,11 +174,15 @@ async function streamAudio(agent, pcmData) {
 
 // Main
 async function main() {
-  let pcmData
-  const mp3Arg = process.argv[2]
+  const args = process.argv.slice(2)
+  const useStream = args.includes('--stream')
+  const useBinary = args.includes('--binary')
+  const fileArg = args.find(a => a !== '--stream' && a !== '--binary')
 
-  if (mp3Arg) {
-    const mp3Path = path.resolve(mp3Arg)
+  let pcmData
+
+  if (fileArg) {
+    const mp3Path = path.resolve(fileArg)
     console.log(`MP3 file: ${mp3Path}`)
     pcmData = tryDecodeMp3(mp3Path)
     if (!pcmData) {
@@ -157,13 +199,24 @@ async function main() {
 
   const agent = await createAgent('AudioBot')
 
-  console.log('Waiting 3 seconds before streaming...')
+  console.log('Waiting 3 seconds before playing...')
   await sleep(3000)
 
-  await streamAudio(agent, pcmData)
+  if (useStream) {
+    console.log('Mode: streaming (advanced)')
+    await streamAudio(agent, pcmData)
+  } else if (useBinary) {
+    console.log('Mode: one-shot binary')
+    playAudioOneShotBinary(agent, pcmData)
+  } else {
+    console.log('Mode: one-shot JSON (default)')
+    playAudioOneShot(agent, pcmData)
+  }
 
-  console.log('Waiting 2 seconds then disconnecting...')
-  await sleep(2000)
+  // Wait for playback to finish
+  const waitSec = Math.ceil(pcmData.length / SAMPLE_RATE / CHANNELS / 2) + 3
+  console.log(`Waiting ${waitSec}s for playback then disconnecting...`)
+  await sleep(waitSec * 1000)
 
   agent.ws.close()
   process.exit(0)

@@ -19,20 +19,24 @@ class AgentAudioStreamProcessor extends AudioWorkletProcessor {
     this.readPos = 0
     this.buffered = 0
     this.stopped = false
+    this.draining = false
 
     // Resampling ratio: source rate / output rate (sampleRate is global in worklet scope)
     this.resampleRatio = this.sourceSampleRate / sampleRate
 
     // Jitter buffer: accumulate this many samples before starting playback
-    this.jitterThreshold = Math.floor(this.sourceSampleRate * 0.1) // 100ms
+    this.jitterThreshold = Math.floor(this.sourceSampleRate * 0.2) // 200ms
+    // After first underrun, use a smaller threshold to resume faster
+    this.underrunThreshold = Math.floor(this.sourceSampleRate * 0.05) // 50ms
     this.playing = false
+    this.hasPlayedOnce = false
 
     this.port.onmessage = (e) => {
       const msg = e.data
       if (msg.type === 'audio') {
         this.enqueueAudio(msg.buffer)
       } else if (msg.type === 'stop') {
-        this.stopped = true
+        this.draining = true
       }
     }
   }
@@ -67,7 +71,8 @@ class AgentAudioStreamProcessor extends AudioWorkletProcessor {
     }
 
     // start playing once we have enough buffered
-    if (!this.playing && this.buffered >= this.jitterThreshold) {
+    const threshold = this.hasPlayedOnce ? this.underrunThreshold : this.jitterThreshold
+    if (!this.playing && this.buffered >= threshold) {
       this.playing = true
     }
   }
@@ -85,6 +90,10 @@ class AgentAudioStreamProcessor extends AudioWorkletProcessor {
       for (let ch = 0; ch < output.length; ch++) {
         output[ch].fill(0)
       }
+      // If draining and nothing left to play, we're done
+      if (this.draining && this.buffered === 0) {
+        return false
+      }
       return true
     }
 
@@ -97,11 +106,46 @@ class AgentAudioStreamProcessor extends AudioWorkletProcessor {
     const sourceSamples = Math.floor(outLen * ratio)
 
     if (this.buffered < sourceSamples) {
+      // If draining, output whatever remains then stop
+      if (this.draining) {
+        if (this.buffered <= 0) return false
+        // Output partial buffer then silence
+        const availFrames = Math.floor(this.buffered / channels)
+        if (availFrames <= 0) return false
+        const availOut = Math.min(outLen, Math.floor(availFrames / ratio))
+        if (availOut <= 0) return false
+
+        if (channels === 1) {
+          const channel = output[0]
+          for (let i = 0; i < availOut; i++) {
+            const srcIdx = Math.floor(i * ratio)
+            const bufIdx = (this.readPos + srcIdx) % bufLen
+            channel[i] = buf[bufIdx]
+          }
+          for (let i = availOut; i < outLen; i++) channel[i] = 0
+          if (output.length > 1) output[1].set(channel)
+        } else {
+          for (let i = 0; i < availOut; i++) {
+            const srcFrame = Math.floor(i * ratio)
+            for (let ch = 0; ch < Math.min(channels, output.length); ch++) {
+              const bufIdx = (this.readPos + srcFrame * channels + ch) % bufLen
+              output[ch][i] = buf[bufIdx]
+            }
+          }
+          for (let ch = 0; ch < output.length; ch++) {
+            for (let i = availOut; i < outLen; i++) output[ch][i] = 0
+          }
+        }
+        this.buffered = 0
+        return false
+      }
+
       // underrun — output silence and re-enter buffering mode
       for (let ch = 0; ch < output.length; ch++) {
         output[ch].fill(0)
       }
       this.playing = false
+      this.hasPlayedOnce = true
       return true
     }
 
@@ -133,6 +177,7 @@ class AgentAudioStreamProcessor extends AudioWorkletProcessor {
 
     if (this.buffered < 0) this.buffered = 0
 
+    this.hasPlayedOnce = true
     return true
   }
 }

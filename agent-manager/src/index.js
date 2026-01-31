@@ -16,6 +16,7 @@ const MAX_BODY_SIZE = 1 * 1024 * 1024   // 1MB request body limit
 const MAX_CHAT_LENGTH = 500              // max characters in a chat message
 const MAX_NAME_LENGTH = 32               // max characters in an agent name
 const PROXIMITY_RADIUS = 5               // meters for proximity events
+const MAX_AGENTS = 100
 
 // ---------------------------------------------------------------------------
 // Global agent registry
@@ -581,7 +582,7 @@ async function handleHttpRequest(req, res) {
   try {
     // ---- Health check ----
     if (method === 'GET' && path === '/health') {
-      sendJson(res, 200, { status: 'ok', agents: agentSessions.size })
+      sendJson(res, 200, { status: 'ok', agents: agentSessions.size, maxAgents: MAX_AGENTS })
       return
     }
 
@@ -683,6 +684,11 @@ async function handleHttpRequest(req, res) {
         avatarWarning = result.warning
       } catch (err) {
         sendJson(res, 400, { error: 'INVALID_PARAMS', message: err.message })
+        return
+      }
+
+      if (agentSessions.size >= MAX_AGENTS) {
+        sendJson(res, 503, { error: 'AGENT_LIMIT', message: `Server agent limit reached (${MAX_AGENTS})` })
         return
       }
 
@@ -984,6 +990,35 @@ wss.on('connection', (ws) => {
         // audio_stop
         agent.stopAudioStream()
         send(ws, 'audio_stopped')
+      } else if (cmd === 0x04) {
+        // audio_play: [0x04][jsonLen:u32LE][json][raw PCM]
+        if (buf.length < 5) return
+        const jsonLen = buf.readUInt32LE(1)
+        if (buf.length < 5 + jsonLen) return
+        let playOpts
+        try {
+          playOpts = JSON.parse(buf.slice(5, 5 + jsonLen).toString('utf-8'))
+        } catch {
+          sendError(ws, 'INVALID_PARAMS', 'Invalid JSON in audio_play binary frame')
+          return
+        }
+        const pcmData = buf.slice(5 + jsonLen)
+        if (pcmData.length === 0) {
+          sendError(ws, 'INVALID_PARAMS', 'audio_play binary frame contains no PCM data')
+          return
+        }
+        try {
+          const streamId = agent.playAudio(pcmData, {
+            sampleRate: playOpts.sampleRate,
+            channels: playOpts.channels,
+            format: playOpts.format,
+          }, () => {
+            send(ws, 'audio_stopped')
+          })
+          send(ws, 'audio_started', { streamId })
+        } catch (err) {
+          sendError(ws, 'AUDIO_ERROR', err.message)
+        }
       }
       return
     }
@@ -1018,6 +1053,11 @@ wss.on('connection', (ws) => {
           avatarWarning = result.warning
         } catch (err) {
           sendError(ws, 'INVALID_PARAMS', err.message)
+          return
+        }
+
+        if (agentSessions.size >= MAX_AGENTS) {
+          sendError(ws, 'AGENT_LIMIT', `Server agent limit reached (${MAX_AGENTS})`)
           return
         }
 
@@ -1413,6 +1453,41 @@ wss.on('connection', (ws) => {
           send(ws, 'avatar_uploaded', { url: result.url, hash: result.hash })
         } catch (err) {
           sendError(ws, 'UPLOAD_FAILED', `Upload failed: ${err.message}`)
+        }
+        break
+      }
+
+      case 'audio_play': {
+        const session = agentSessions.get(agentId)
+        const agent = session?.agent
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        const { samples: playB64, sampleRate: playSR, channels: playCh, format: playFmt } = msg
+        if (!playB64 || typeof playB64 !== 'string') {
+          sendError(ws, 'INVALID_PARAMS', 'audio_play requires { samples: string (base64) }')
+          return
+        }
+        let playBuffer
+        try {
+          playBuffer = Buffer.from(playB64, 'base64')
+        } catch {
+          sendError(ws, 'INVALID_PARAMS', 'samples must be valid base64')
+          return
+        }
+        try {
+          const streamId = agent.playAudio(playBuffer, {
+            sampleRate: playSR,
+            channels: playCh,
+            format: playFmt,
+          }, () => {
+            send(ws, 'audio_stopped')
+          })
+          send(ws, 'audio_started', { streamId })
+        } catch (err) {
+          sendError(ws, 'AUDIO_ERROR', err.message)
         }
         break
       }

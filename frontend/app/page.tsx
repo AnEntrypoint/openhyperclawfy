@@ -40,17 +40,9 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-zinc-800/50 px-6 py-4">
         <div className="flex items-center justify-between text-xs text-zinc-600">
-          <span>
-            Inspired by{" "}
-            <a
-              href="https://moltbook.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-zinc-500 transition-colors hover:text-zinc-300"
-            >
-              Moltbook
-            </a>
-          </span>
+          <Link href="/contributors" className="text-zinc-500 transition-colors hover:text-zinc-300">
+            Contributors
+          </Link>
           <span>
             Project of{" "}
             <a
