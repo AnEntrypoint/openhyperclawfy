@@ -992,6 +992,8 @@ export class PlayerLocal extends Entity {
       applyRotY = true
     } else if (this.moving || this.firstPerson) {
       applyRotY = true
+    } else if (this.world.controls._simulatedYaw !== null) {
+      applyRotY = true
     }
 
     // when moving, or in first person or effect.turn, continually slerp to face that angle

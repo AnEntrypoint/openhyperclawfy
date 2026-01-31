@@ -15,12 +15,16 @@ const INACTIVITY_TTL = 5 * 60 * 1000 // 5 min inactivity for all agents
 const MAX_BODY_SIZE = 1 * 1024 * 1024   // 1MB request body limit
 const MAX_CHAT_LENGTH = 500              // max characters in a chat message
 const MAX_NAME_LENGTH = 32               // max characters in an agent name
+const PROXIMITY_RADIUS = 5               // meters for proximity events
 
 // ---------------------------------------------------------------------------
 // Global agent registry
 // ---------------------------------------------------------------------------
 const agentSessions = new Map()  // agentId → AgentSession
 const tokenIndex = new Map()     // token → agentId (reverse lookup for auth)
+const proximityState = new Map() // agentId → Set<nearbyAgentId>
+
+const round2 = (n) => Math.round(n * 100) / 100
 
 /**
  * AgentSession shape:
@@ -36,6 +40,26 @@ function destroySession(agentId) {
   if (session.agent) {
     try { session.agent.disconnect() } catch { /* already disconnected */ }
   }
+
+  // Clean up proximity state — emit exit events to remaining nearby agents
+  const nearbySet = proximityState.get(agentId)
+  if (nearbySet) {
+    for (const otherId of nearbySet) {
+      const otherSet = proximityState.get(otherId)
+      if (otherSet) otherSet.delete(agentId)
+      const otherSession = agentSessions.get(otherId)
+      if (otherSession) {
+        const exitEvent = {
+          type: 'proximity',
+          entered: [],
+          exited: [{ displayName: session.displayName, id: agentId }],
+        }
+        pushEvent(otherSession, exitEvent)
+      }
+    }
+    proximityState.delete(agentId)
+  }
+
   agentSessions.delete(agentId)
   console.log(`Session destroyed: ${agentId} (${session.transport})`)
 }
@@ -62,6 +86,39 @@ function resolveFromName(fromId, fallback) {
     }
   }
   return fallback
+}
+
+// ---------------------------------------------------------------------------
+// Push event to a session (WS or HTTP event buffer)
+// ---------------------------------------------------------------------------
+function pushEvent(session, event) {
+  if (session.transport === 'ws' && session.ws) {
+    if (session.ws.readyState === session.ws.OPEN) {
+      session.ws.send(JSON.stringify(event))
+    }
+  } else if (session.eventBuffer) {
+    session.eventBuffer.push(event)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Resolve agent session by displayName (case-insensitive, strips @)
+// ---------------------------------------------------------------------------
+function resolveAgentByName(name) {
+  const clean = name.startsWith('@') ? name.slice(1) : name
+  const lower = clean.toLowerCase()
+  for (const [id, session] of agentSessions) {
+    if (session.agent.status === 'connected' && session.displayName.toLowerCase() === lower) {
+      return { id, session }
+    }
+  }
+  // Partial match on base name (without #suffix)
+  for (const [id, session] of agentSessions) {
+    if (session.agent.status === 'connected' && session.agent.name.toLowerCase() === lower) {
+      return { id, session }
+    }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +245,30 @@ function parseTextCommand(line) {
   if (trimmed === 'who') return { action: 'who' }
   if (trimmed === 'ping') return { action: 'ping' }
   if (trimmed === 'despawn') return { action: 'despawn' }
+  if (trimmed === 'position' || trimmed === 'pos') return { action: 'position' }
+  if (trimmed === 'stop') return { action: 'stop' }
+
+  // nearby [radius]
+  const nearbyMatch = trimmed.match(/^nearby(?:\s+(\S+))?$/)
+  if (nearbyMatch) {
+    const radius = nearbyMatch[1] ? parseFloat(nearbyMatch[1]) : 10
+    if (isNaN(radius) || radius <= 0) return { action: 'nearby_error', error: 'Radius must be a positive number' }
+    return { action: 'nearby', radius }
+  }
+
+  // goto x z  OR  goto @DisplayName
+  const gotoMatch = trimmed.match(/^goto\s+(.+)$/)
+  if (gotoMatch) {
+    const val = gotoMatch[1].trim()
+    // Check for coordinate pair: goto x z
+    const coordMatch = val.match(/^(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)$/)
+    if (coordMatch) {
+      return { action: 'goto', x: parseFloat(coordMatch[1]), z: parseFloat(coordMatch[2]) }
+    }
+    // Otherwise treat as agent name
+    return { action: 'goto', target: val }
+  }
+  if (trimmed === 'goto') return { action: 'goto_error', error: 'goto requires coordinates (goto x z) or agent name (goto @Name)' }
 
   return { action: 'unknown', raw: trimmed }
 }
@@ -198,8 +279,13 @@ function parseTextCommand(line) {
 const SESSION_COMMANDS = [
   'say <text>',
   'move forward|backward|left|right|jump [ms]',
-  'face <direction|yaw|auto>',
-  'look <direction|yaw|auto>',
+  'face <direction|yaw|auto|@Name>',
+  'look <direction|yaw|auto|@Name>',
+  'position',
+  'nearby [radius]',
+  'goto <x> <z>',
+  'goto @<Name>',
+  'stop',
   'who',
   'ping',
   'despawn',
@@ -235,13 +321,25 @@ function executeCommand(session, cmd) {
       return { ok: true, action: 'move', direction: cmd.direction, duration: cmd.duration }
     }
     case 'face': {
-      if (cmd.direction === '') return { ok: false, error: 'face requires a direction, yaw, or auto' }
+      if (cmd.direction === '') return { ok: false, error: 'face requires a direction, yaw, auto, or @Name' }
       if (typeof cmd.yaw === 'number' && !Number.isFinite(cmd.yaw)) return { ok: false, error: 'yaw must be a finite number' }
       if (agent.status !== 'connected') return { ok: false, error: `Agent not connected (${agent.status})` }
       try {
         if (typeof cmd.yaw === 'number') {
           agent.face(cmd.yaw)
           return { ok: true, action: 'face', yaw: cmd.yaw }
+        } else if (typeof cmd.direction === 'string' && cmd.direction.startsWith('@')) {
+          // face @Name — look up target agent and compute yaw
+          const resolved = resolveAgentByName(cmd.direction)
+          if (!resolved) return { ok: false, error: `Agent not found: ${cmd.direction}` }
+          const myPos = agent.getPosition()
+          const theirPos = resolved.session.agent.getPosition()
+          if (!myPos || !theirPos) return { ok: false, error: 'Could not get positions' }
+          const dx = theirPos.x - myPos.x
+          const dz = theirPos.z - myPos.z
+          const yaw = Math.atan2(-dx, -dz)
+          agent.face(yaw)
+          return { ok: true, action: 'face', target: resolved.session.displayName, yaw: round2(yaw) }
         } else {
           agent.face(cmd.direction ?? null)
           return { ok: true, action: 'face', direction: cmd.direction ?? 'auto' }
@@ -254,13 +352,117 @@ function executeCommand(session, cmd) {
       const agents = []
       for (const [id, s] of agentSessions) {
         if (s.agent.status === 'connected') {
-          agents.push({ displayName: s.displayName, id, playerId: s.agent.getPlayerId() })
+          const entry = { displayName: s.displayName, id, playerId: s.agent.getPlayerId() }
+          const pos = s.agent.getPosition()
+          if (pos) entry.position = pos
+          agents.push(entry)
         }
       }
       return { ok: true, action: 'who', agents }
     }
     case 'ping': {
       return { ok: true, action: 'pong', agentStatus: agent.status }
+    }
+    case 'position': {
+      if (agent.status !== 'connected') return { ok: false, error: `Agent not connected (${agent.status})` }
+      const pos = agent.getPosition()
+      if (!pos) return { ok: false, error: 'Position not available' }
+      const yaw = agent.getYaw()
+      return { ok: true, action: 'position', x: pos.x, y: pos.y, z: pos.z, yaw }
+    }
+    case 'nearby_error': {
+      return { ok: false, error: cmd.error }
+    }
+    case 'nearby': {
+      if (agent.status !== 'connected') return { ok: false, error: `Agent not connected (${agent.status})` }
+      const myPos = agent.getPosition()
+      if (!myPos) return { ok: false, error: 'Position not available' }
+      const radius = cmd.radius || 10
+      const nearby = []
+      for (const [id, s] of agentSessions) {
+        if (id === session.agent.id) continue
+        if (s.agent.status !== 'connected') continue
+        const theirPos = s.agent.getPosition()
+        if (!theirPos) continue
+        const dx = theirPos.x - myPos.x
+        const dz = theirPos.z - myPos.z
+        const dist = Math.sqrt(dx * dx + dz * dz)
+        if (dist <= radius) {
+          nearby.push({
+            displayName: s.displayName,
+            id,
+            playerId: s.agent.getPlayerId(),
+            position: theirPos,
+            distance: round2(dist),
+          })
+        }
+      }
+      nearby.sort((a, b) => a.distance - b.distance)
+      return { ok: true, action: 'nearby', radius, agents: nearby }
+    }
+    case 'goto_error': {
+      return { ok: false, error: cmd.error }
+    }
+    case 'goto': {
+      if (agent.status !== 'connected') return { ok: false, error: `Agent not connected (${agent.status})` }
+      const myPos = agent.getPosition()
+      if (!myPos) return { ok: false, error: 'Position not available' }
+
+      let navX, navZ, targetName = null, getTargetPos = null
+
+      if (cmd.target) {
+        // Navigate to agent by name
+        const resolved = resolveAgentByName(cmd.target)
+        if (!resolved) return { ok: false, error: `Agent not found: ${cmd.target}` }
+        targetName = resolved.session.displayName
+        const targetId = resolved.id
+        const theirPos = resolved.session.agent.getPosition()
+        if (!theirPos) return { ok: false, error: `Cannot get position of ${targetName}` }
+        navX = theirPos.x
+        navZ = theirPos.z
+        // Track moving target
+        getTargetPos = () => {
+          const s = agentSessions.get(targetId)
+          if (!s || s.agent.status !== 'connected') return null
+          return s.agent.getPosition()
+        }
+      } else {
+        navX = cmd.x
+        navZ = cmd.z
+      }
+
+      const dx = navX - myPos.x
+      const dz = navZ - myPos.z
+      const startDistance = round2(Math.sqrt(dx * dx + dz * dz))
+
+      // Start navigation asynchronously
+      const agentId = session.agent.id
+      agent.navigateTo(navX, navZ, { getTargetPos }).then((result) => {
+        const s = agentSessions.get(agentId)
+        if (!s) return
+        const event = {
+          type: 'navigate',
+          status: result.arrived ? 'arrived' : 'failed',
+          position: result.position,
+          distance: result.distance,
+        }
+        if (result.error && !result.arrived) event.error = result.error
+        if (targetName) event.target = targetName
+        pushEvent(s, event)
+      })
+
+      const startEvent = { type: 'navigate', status: 'started', distance: startDistance }
+      if (targetName) {
+        startEvent.target = targetName
+      } else {
+        startEvent.target = { x: navX, z: navZ }
+      }
+      return { ok: true, action: 'goto', ...startEvent }
+    }
+    case 'stop': {
+      if (agent.status !== 'connected') return { ok: false, error: `Agent not connected (${agent.status})` }
+      agent.cancelNavigation()
+      return { ok: true, action: 'stop' }
     }
     case 'despawn': {
       return { ok: true, action: 'despawn', _despawn: true }
@@ -862,13 +1064,31 @@ wss.on('connection', (ws) => {
             agent ? 'Agent is not connected' : 'Send spawn first')
           return
         }
-        const { direction: faceDir, yaw } = msg
+        const { direction: faceDir, yaw, target: faceTarget } = msg
         if (typeof yaw === 'number' && !Number.isFinite(yaw)) {
           sendError(ws, 'INVALID_PARAMS', 'yaw must be a finite number')
           return
         }
         try {
-          if (typeof yaw === 'number') {
+          if (faceTarget) {
+            // face toward another agent
+            const resolved = resolveAgentByName(faceTarget)
+            if (!resolved) {
+              sendError(ws, 'INVALID_PARAMS', `Agent not found: ${faceTarget}`)
+              return
+            }
+            const myPos = agent.getPosition()
+            const theirPos = resolved.session.agent.getPosition()
+            if (!myPos || !theirPos) {
+              sendError(ws, 'INVALID_PARAMS', 'Could not get positions')
+              return
+            }
+            const dx = theirPos.x - myPos.x
+            const dz = theirPos.z - myPos.z
+            const computedYaw = round2(Math.atan2(-dx, -dz))
+            agent.face(computedYaw)
+            send(ws, 'face', { target: resolved.session.displayName, yaw: computedYaw })
+          } else if (typeof yaw === 'number') {
             agent.face(yaw)
             send(ws, 'face', { yaw })
           } else if (faceDir === null) {
@@ -878,7 +1098,7 @@ wss.on('connection', (ws) => {
             agent.face(faceDir)
             send(ws, 'face', { direction: faceDir })
           } else {
-            sendError(ws, 'INVALID_PARAMS', 'face requires { direction: string } or { yaw: number } or { direction: null }')
+            sendError(ws, 'INVALID_PARAMS', 'face requires { direction }, { yaw }, { target }, or { direction: null }')
             return
           }
         } catch (err) {
@@ -887,11 +1107,156 @@ wss.on('connection', (ws) => {
         break
       }
 
+      case 'position': {
+        const session = agentSessions.get(agentId)
+        const agent = session?.agent
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        const pos = agent.getPosition()
+        if (!pos) {
+          sendError(ws, 'NOT_CONNECTED', 'Position not available')
+          return
+        }
+        const yawVal = agent.getYaw()
+        send(ws, 'position', { x: pos.x, y: pos.y, z: pos.z, yaw: yawVal })
+        break
+      }
+
+      case 'nearby': {
+        const session = agentSessions.get(agentId)
+        const agent = session?.agent
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        const myPos = agent.getPosition()
+        if (!myPos) {
+          sendError(ws, 'NOT_CONNECTED', 'Position not available')
+          return
+        }
+        const radius = (typeof msg.radius === 'number' && msg.radius > 0) ? msg.radius : 10
+        const nearbyAgents = []
+        for (const [id, s] of agentSessions) {
+          if (id === agentId) continue
+          if (s.agent.status !== 'connected') continue
+          const theirPos = s.agent.getPosition()
+          if (!theirPos) continue
+          const dx = theirPos.x - myPos.x
+          const dz = theirPos.z - myPos.z
+          const dist = Math.sqrt(dx * dx + dz * dz)
+          if (dist <= radius) {
+            nearbyAgents.push({
+              displayName: s.displayName,
+              id,
+              playerId: s.agent.getPlayerId(),
+              position: theirPos,
+              distance: round2(dist),
+            })
+          }
+        }
+        nearbyAgents.sort((a, b) => a.distance - b.distance)
+        send(ws, 'nearby', { radius, agents: nearbyAgents })
+        break
+      }
+
+      case 'navigate': {
+        const session = agentSessions.get(agentId)
+        const agent = session?.agent
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        const myPos = agent.getPosition()
+        if (!myPos) {
+          sendError(ws, 'NOT_CONNECTED', 'Position not available')
+          return
+        }
+
+        let navX, navZ, targetName = null, getTargetPos = null
+
+        if (msg.target) {
+          const resolved = resolveAgentByName(msg.target)
+          if (!resolved) {
+            sendError(ws, 'INVALID_PARAMS', `Agent not found: ${msg.target}`)
+            return
+          }
+          targetName = resolved.session.displayName
+          const targetId = resolved.id
+          const theirPos = resolved.session.agent.getPosition()
+          if (!theirPos) {
+            sendError(ws, 'INVALID_PARAMS', `Cannot get position of ${targetName}`)
+            return
+          }
+          navX = theirPos.x
+          navZ = theirPos.z
+          getTargetPos = () => {
+            const s = agentSessions.get(targetId)
+            if (!s || s.agent.status !== 'connected') return null
+            return s.agent.getPosition()
+          }
+        } else if (typeof msg.x === 'number' && typeof msg.z === 'number') {
+          navX = msg.x
+          navZ = msg.z
+        } else {
+          sendError(ws, 'INVALID_PARAMS', 'navigate requires { x, z } or { target }')
+          return
+        }
+
+        const dx = navX - myPos.x
+        const dz = navZ - myPos.z
+        const startDistance = round2(Math.sqrt(dx * dx + dz * dz))
+
+        const currentAgentId = agentId
+        agent.navigateTo(navX, navZ, { getTargetPos }).then((result) => {
+          const s = agentSessions.get(currentAgentId)
+          if (!s || !s.ws || s.ws.readyState !== s.ws.OPEN) return
+          const event = {
+            type: 'navigate',
+            status: result.arrived ? 'arrived' : 'failed',
+            position: result.position,
+            distance: result.distance,
+          }
+          if (result.error && !result.arrived) event.error = result.error
+          if (targetName) event.target = targetName
+          s.ws.send(JSON.stringify(event))
+        })
+
+        const startPayload = { status: 'started', distance: startDistance }
+        if (targetName) {
+          startPayload.target = targetName
+        } else {
+          startPayload.target = { x: navX, z: navZ }
+        }
+        send(ws, 'navigate', startPayload)
+        break
+      }
+
+      case 'stop': {
+        const session = agentSessions.get(agentId)
+        const agent = session?.agent
+        if (!agent || agent.status !== 'connected') {
+          sendError(ws, agent ? 'NOT_CONNECTED' : 'SPAWN_REQUIRED',
+            agent ? 'Agent is not connected' : 'Send spawn first')
+          return
+        }
+        agent.cancelNavigation()
+        send(ws, 'stop', {})
+        break
+      }
+
       case 'who': {
         const agents = []
         for (const [id, s] of agentSessions) {
           if (s.agent.status === 'connected') {
-            agents.push({ displayName: s.displayName, id, playerId: s.agent.getPlayerId() })
+            const entry = { displayName: s.displayName, id, playerId: s.agent.getPlayerId() }
+            const pos = s.agent.getPosition()
+            if (pos) entry.position = pos
+            agents.push(entry)
           }
         }
         send(ws, 'who', { agents })
@@ -1017,11 +1382,70 @@ const cleanupInterval = setInterval(() => {
 }, 60_000)
 
 // ---------------------------------------------------------------------------
+// Proximity monitor — checks pairwise distances every 1s
+// ---------------------------------------------------------------------------
+const proximityInterval = setInterval(() => {
+  const connected = []
+  for (const [id, session] of agentSessions) {
+    if (session.agent.status === 'connected') {
+      const pos = session.agent.getPosition()
+      if (pos) connected.push({ id, session, pos })
+    }
+  }
+
+  for (let i = 0; i < connected.length; i++) {
+    for (let j = i + 1; j < connected.length; j++) {
+      const a = connected[i]
+      const b = connected[j]
+      const dx = a.pos.x - b.pos.x
+      const dz = a.pos.z - b.pos.z
+      const dist = Math.sqrt(dx * dx + dz * dz)
+
+      const aSet = proximityState.get(a.id) || new Set()
+      const bSet = proximityState.get(b.id) || new Set()
+      if (!proximityState.has(a.id)) proximityState.set(a.id, aSet)
+      if (!proximityState.has(b.id)) proximityState.set(b.id, bSet)
+
+      if (dist <= PROXIMITY_RADIUS && !aSet.has(b.id)) {
+        // Enter
+        aSet.add(b.id)
+        bSet.add(a.id)
+        pushEvent(a.session, {
+          type: 'proximity',
+          entered: [{ displayName: b.session.displayName, id: b.id, position: b.pos, distance: round2(dist) }],
+          exited: [],
+        })
+        pushEvent(b.session, {
+          type: 'proximity',
+          entered: [{ displayName: a.session.displayName, id: a.id, position: a.pos, distance: round2(dist) }],
+          exited: [],
+        })
+      } else if (dist > PROXIMITY_RADIUS && aSet.has(b.id)) {
+        // Exit
+        aSet.delete(b.id)
+        bSet.delete(a.id)
+        pushEvent(a.session, {
+          type: 'proximity',
+          entered: [],
+          exited: [{ displayName: b.session.displayName, id: b.id }],
+        })
+        pushEvent(b.session, {
+          type: 'proximity',
+          entered: [],
+          exited: [{ displayName: a.session.displayName, id: a.id }],
+        })
+      }
+    }
+  }
+}, 1000)
+
+// ---------------------------------------------------------------------------
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 const shutdown = () => {
   console.log('Shutting down agent-manager...')
   clearInterval(cleanupInterval)
+  clearInterval(proximityInterval)
 
   // Destroy all agent sessions (both WS and HTTP)
   for (const [id] of agentSessions) {

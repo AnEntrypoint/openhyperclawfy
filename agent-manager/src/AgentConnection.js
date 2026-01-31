@@ -1,5 +1,7 @@
 import { createNodeClientWorld } from '../../hyperfy/build/world-node-client.js'
 
+const round2 = (n) => Math.round(n * 100) / 100
+
 const DIRECTION_KEYS = {
   forward: 'keyW',
   backward: 'keyS',
@@ -24,6 +26,9 @@ export class AgentConnection {
     this.world = null
     this._moveTimers = []
     this._chatListener = null
+    this._navInterval = null
+    this._navResolve = null
+    this._navReject = null
 
     // Callback hooks — set by the WS session handler before connect()
     this.onWorldChat = null
@@ -83,6 +88,20 @@ export class AgentConnection {
     return this.world?.network?.id ?? null
   }
 
+  getPosition() {
+    const player = this.world?.entities?.player
+    if (!player) return null
+    const p = player.base.position
+    return { x: round2(p.x), y: round2(p.y), z: round2(p.z) }
+  }
+
+  getYaw() {
+    const player = this.world?.entities?.player
+    if (!player) return null
+    const q = player.base.quaternion
+    return round2(Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x)))
+  }
+
   speak(text) {
     if (this.status !== 'connected') {
       throw new Error(`Agent is not connected (status: ${this.status})`)
@@ -94,6 +113,7 @@ export class AgentConnection {
     if (this.status !== 'connected') {
       throw new Error(`Agent is not connected (status: ${this.status})`)
     }
+    this.cancelNavigation()
     if (typeof yawOrDirection === 'number') {
       this.world.controls.simulateLook(yawOrDirection)
     } else if (typeof yawOrDirection === 'string') {
@@ -112,6 +132,7 @@ export class AgentConnection {
     if (this.status !== 'connected') {
       throw new Error(`Agent is not connected (status: ${this.status})`)
     }
+    this.cancelNavigation()
     const key = DIRECTION_KEYS[direction]
     if (!key) {
       throw new Error(`Invalid direction: ${direction}. Use: ${Object.keys(DIRECTION_KEYS).join(', ')}`)
@@ -125,7 +146,101 @@ export class AgentConnection {
     this._moveTimers.push(timer)
   }
 
+  navigateTo(targetX, targetZ, { arrivalRadius = 2.0, timeout = 30000, getTargetPos = null } = {}) {
+    if (this.status !== 'connected') {
+      return Promise.reject(new Error(`Agent is not connected (status: ${this.status})`))
+    }
+    // Cancel any existing navigation
+    this.cancelNavigation()
+
+    return new Promise((resolve) => {
+      const startTime = Date.now()
+      this._navResolve = resolve
+
+      const tick = () => {
+        const pos = this.getPosition()
+        if (!pos) {
+          this._cleanupNav()
+          resolve({ arrived: false, position: null, distance: null, error: 'Lost position' })
+          return
+        }
+
+        // If tracking an agent, update target each tick
+        let tx = targetX
+        let tz = targetZ
+        if (getTargetPos) {
+          const tp = getTargetPos()
+          if (tp) {
+            tx = tp.x
+            tz = tp.z
+          }
+        }
+
+        const dx = tx - pos.x
+        const dz = tz - pos.z
+        const distance = Math.sqrt(dx * dx + dz * dz)
+
+        // Arrived?
+        if (distance <= arrivalRadius) {
+          // Stop moving
+          this.world.controls.simulateButton('keyW', false)
+          this.world.controls.simulateLook(null)
+          this._cleanupNav()
+          resolve({ arrived: true, position: pos, distance: round2(distance) })
+          return
+        }
+
+        // Timeout?
+        if (Date.now() - startTime > timeout) {
+          this.world.controls.simulateButton('keyW', false)
+          this.world.controls.simulateLook(null)
+          this._cleanupNav()
+          resolve({ arrived: false, position: pos, distance: round2(distance), error: 'Navigation timeout' })
+          return
+        }
+
+        // Face toward target and walk forward
+        const yaw = Math.atan2(-dx, -dz)
+        this.world.controls.simulateLook(yaw)
+        this.world.controls.simulateButton('keyW', true)
+      }
+
+      // Run first tick immediately, then every 200ms
+      tick()
+      this._navInterval = setInterval(tick, 200)
+    })
+  }
+
+  cancelNavigation() {
+    if (this._navInterval) {
+      clearInterval(this._navInterval)
+      this._navInterval = null
+    }
+    if (this._navResolve) {
+      // Release W key and restore auto-face
+      if (this.world && this.status === 'connected') {
+        this.world.controls.simulateButton('keyW', false)
+        this.world.controls.simulateLook(null)
+      }
+      const resolve = this._navResolve
+      this._navResolve = null
+      this._navReject = null
+      const pos = this.getPosition()
+      resolve({ arrived: false, position: pos, distance: null, error: 'Cancelled' })
+    }
+  }
+
+  _cleanupNav() {
+    if (this._navInterval) {
+      clearInterval(this._navInterval)
+      this._navInterval = null
+    }
+    this._navResolve = null
+    this._navReject = null
+  }
+
   disconnect() {
+    this.cancelNavigation()
     for (const timer of this._moveTimers) {
       clearTimeout(timer)
     }
