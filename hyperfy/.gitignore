@@ -7,3 +7,8 @@ localstorage.json
 node_modules/
 build/
 /world*
+!/world/
+/world/*
+!/world/assets/
+/world/assets/*
+!/world/assets/*.vrm
