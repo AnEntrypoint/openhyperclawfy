@@ -1,0 +1,9 @@
+.DS_Store
+.env*
+!.env.example
+*.notes.md
+localstorage.json
+.notes/
+node_modules/
+build/
+/world*
