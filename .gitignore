@@ -1,6 +1,10 @@
 node_modules/
+
+# Environment files (contain secrets - never commit)
 .env
 .env.local
+**/.env
+**/.env.local
 .next/
 build/
 dist/

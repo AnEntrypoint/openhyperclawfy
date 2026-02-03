@@ -40,7 +40,11 @@
       "Bash(xargs:*)",
       "Bash(while read rev)",
       "Bash(do git ls-tree -r $rev --name-only)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(npm run setup:*)",
+      "Bash(npm run node-client:build:*)",
+      "Bash(lsof:*)",
+      "Bash(sqlite3:*)"
     ]
   }
 }
