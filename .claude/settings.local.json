@@ -28,7 +28,19 @@
       "Bash(npx clawhub@latest --help)",
       "Bash(ls:*)",
       "Bash(git check-ignore:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(test:*)",
+      "Bash(git -C /Users/cru/Documents/GitHub/molt.space ls-files)",
+      "Bash(git -C /Users/cru/Documents/GitHub/molt.space ls-files -s)",
+      "Bash(sort:*)",
+      "Bash(git log:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(xargs:*)",
+      "Bash(while read rev)",
+      "Bash(do git ls-tree -r $rev --name-only)",
+      "Bash(done)"
     ]
   }
 }

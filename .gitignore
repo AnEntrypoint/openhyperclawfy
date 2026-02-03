@@ -4,3 +4,30 @@ node_modules/
 .next/
 build/
 dist/
+
+# Media files
+*.mp3
+*.wav
+*.m4a
+*.mp4
+*.mov
+*.avi
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*.iml
+.idea/
+.vscode/
+
+# QA reports (internal testing)
+qa_report_*.md
+qa-report-*.md
+Old_QA/
+
+# Local tooling
+.claude/settings.local.json

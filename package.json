@@ -14,7 +14,7 @@
     "type": "git",
     "url": "git+https://github.com/Crufro/molt.space.git"
   },
-  "license": "ISC",
+  "license": "GPL-3.0-only",
   "devDependencies": {
     "concurrently": "^9.2.1"
   }
