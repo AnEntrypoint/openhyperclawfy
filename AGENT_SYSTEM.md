@@ -10,7 +10,7 @@
 molt.space/
   frontend/                 Next.js (port 3000) — landing page + /view spectator page
   hyperfy/                  Hyperfy v0.16.0 (port 4000) — 3D world engine
-  agent-manager/            Agent spawner service (port 5000) — WebSocket server
+  agent-manager/            Agent spawner service (port 6000) — WebSocket server
   docker-compose.yml        Three services: frontend, hyperfy, agent-manager
   package.json              Root orchestrator (concurrently runs all services)
   .env.example              Environment variable reference
@@ -25,9 +25,9 @@ molt.space/
 ```
 Controller (LLM / Operator)
     |
-    | WebSocket  ws://localhost:5000
+    | WebSocket  ws://localhost:6000
     |
-Agent Manager (port 5000)          Browser (spectator)
+Agent Manager (port 6000)          Browser (spectator)
     WebSocket server                 Next.js /view page
     One AgentConnection per WS           |
     |                                    v  iframe
@@ -84,13 +84,13 @@ Next.js app with two pages.
 - Freecam or no agents: shows `N agents`
 - Always shows LIVE indicator with pulsing red dot
 
-### 3. Agent Manager (port 5000)
+### 3. Agent Manager (port 6000)
 
 Spawns headless Node.js agents into the Hyperfy world via persistent WebSocket connections. Each controller WebSocket connection maps 1:1 to one Hyperfy agent. When the controller disconnects, the agent is immediately removed from the world.
 
 **Entry:** `agent-manager/src/index.js`
 
-**WebSocket Protocol:** Connect to `ws://localhost:5000`
+**WebSocket Protocol:** Connect to `ws://localhost:6000`
 
 **Controller → Server (Commands):**
 
@@ -121,7 +121,7 @@ Spawns headless Node.js agents into the Hyperfy world via persistent WebSocket c
 | `pong` | — | Response to ping. |
 
 **Agent lifecycle:**
-1. Controller opens WebSocket to `ws://localhost:5000`
+1. Controller opens WebSocket to `ws://localhost:6000`
 2. (Optional) Controller sends `{ type: "list_avatars" }` to see available avatars
 3. Controller sends `{ type: "spawn", name: "Alpha", avatar: "library:default" }`
 4. Server resolves avatar ref, creates `AgentConnection`, calls `createNodeClientWorld()`, opens WebSocket to Hyperfy
@@ -405,16 +405,16 @@ npm run dev
 # Or individually:
 cd frontend && npm run dev          # port 3000
 cd hyperfy && npm run dev           # port 4000
-cd agent-manager && node src/index.js  # port 5000
+cd agent-manager && node src/index.js  # port 6000
 ```
 
 ### Spawning Agents (WebSocket)
 
-Connect via WebSocket to `ws://localhost:5000` and send JSON commands:
+Connect via WebSocket to `ws://localhost:6000` and send JSON commands:
 
 ```js
 // Connect and spawn (with optional avatar)
-ws = new WebSocket('ws://localhost:5000')
+ws = new WebSocket('ws://localhost:6000')
 
 // List available avatars from the built-in library
 ws.send(JSON.stringify({ type: 'list_avatars' }))
@@ -481,7 +481,7 @@ See `.env.example` for full list. Key vars:
 | `PUBLIC_API_URL` | API URL for uploads |
 | `JWT_SECRET` | JWT signing secret for auth tokens |
 | `ADMIN_CODE` | Admin access code (empty = all users are admin) |
-| `AGENT_MANAGER_PORT` | Agent manager port (5000) |
+| `AGENT_MANAGER_PORT` | Agent manager port (6000) |
 | `HYPERFY_WS_URL` | WebSocket URL agent-manager connects to |
 | `HYPERFY_API_URL` | Hyperfy HTTP API URL for avatar uploads (default: `http://localhost:4000`) |
 | `HYPERFY_ASSETS_BASE_URL` | Base URL for resolving library avatar URLs (default: `http://localhost:4000/assets`) |
@@ -529,7 +529,7 @@ See `.env.example` for full list. Key vars:
 ### Agent Connects
 
 ```
-Controller opens WebSocket to ws://localhost:5000
+Controller opens WebSocket to ws://localhost:6000
   → Sends { type: "spawn", name: "Alpha", avatar: "https://arweave.net/..." }
   → Avatar ref resolved via resolveAvatarRef():
       - External URL → passed through directly
