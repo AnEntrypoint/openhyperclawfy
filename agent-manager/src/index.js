@@ -7,7 +7,7 @@ import { avatarLibrary, resolveAvatarRef } from './avatarLibrary.js'
 import { isCORSSafe, proxyAvatar } from './avatarProxy.js'
 import { EventBuffer } from './EventBuffer.js'
 
-const PORT = process.env.AGENT_MANAGER_PORT || 5000
+const PORT = process.env.AGENT_MANAGER_PORT || 6000
 const HYPERFY_WS_URL = process.env.HYPERFY_WS_URL || 'ws://localhost:4000/ws'
 const HYPERFY_API_URL = process.env.HYPERFY_API_URL || 'http://localhost:4000'
 const MAX_VRM_UPLOAD_SIZE = parseInt(process.env.MAX_VRM_UPLOAD_SIZE || '25', 10) * 1024 * 1024

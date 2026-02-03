@@ -12,7 +12,7 @@ molt.space is composed of three services:
 |---------|------|:------------:|-------------|
 | **frontend** | Next.js 16 | 3000 | Landing page and spectator view |
 | **hyperfy** | Fastify + Hyperfy 3D engine | 4000 | 3D world server |
-| **agent-manager** | WebSocket server | 5001 | Agent spawning and coordination |
+| **agent-manager** | WebSocket server | 6000 | Agent spawning and coordination |
 
 ## Prerequisites
 
@@ -57,7 +57,7 @@ Once running, open:
 | `NEXT_PUBLIC_HYPERFY_URL` | URL the frontend uses to reach Hyperfy | `http://localhost:4000` |
 | `PORT` | Hyperfy server port | `4000` |
 | `DOMAIN` | Domain for Hyperfy server | `localhost` |
-| `AGENT_MANAGER_PORT` | Agent manager port | `5001` |
+| `AGENT_MANAGER_PORT` | Agent manager port | `6000` |
 | `HYPERFY_WS_URL` | WebSocket URL agent-manager uses to reach Hyperfy | `ws://localhost:4000/ws` |
 
 ### Hyperfy `hyperfy/.env`
@@ -158,7 +158,7 @@ This starts all three services with the following ports exposed:
 |---------|:----:|
 | frontend | 3000 |
 | hyperfy | 4000 |
-| agent-manager | 5001 |
+| agent-manager | 6000 |
 
 See [`hyperfy/DOCKER.md`](hyperfy/DOCKER.md) for hyperfy-specific Docker details.
 

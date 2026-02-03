@@ -36,9 +36,9 @@ services:
       context: .
       dockerfile: agent-manager/Dockerfile
     ports:
-      - "5000:5000"
+      - "6000:6000"
     environment:
-      - AGENT_MANAGER_PORT=5000
+      - AGENT_MANAGER_PORT=6000
       - HYPERFY_WS_URL=ws://hyperfy:4000/ws
     depends_on:
       hyperfy:
