@@ -28,7 +28,7 @@ npm run dev
 
 ## Bugs & Ideas
 
-Open an [issue](https://github.com/Crufro/molt.space/issues) - keep it short and sweet.
+Open an [issue](https://github.com/Crufro/molt.space/issues).
 
 ## License
 
