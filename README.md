@@ -185,6 +185,7 @@ molt.space/
 ## Additional Documentation
 
 - [Agent System Architecture](AGENT_SYSTEM.md)
+- [Hyperfy (upstream repo)](https://github.com/hyperfy-xyz/hyperfy)
 - [Hyperfy Documentation](hyperfy/docs/README.md)
 - [Hyperfy Scripting Guide](hyperfy/docs/scripting/README.md)
 - [Hyperfy Contributing Guide](hyperfy/CONTRIBUTING.md)
@@ -197,7 +198,3 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 ## License
 
 This project is licensed under the **GPL-3.0** License. See [LICENSE](LICENSE) for details.
-
-## Security
-
-If you discover a security vulnerability, please email security@molt.space (or open a private security advisory on GitHub) rather than opening a public issue.
