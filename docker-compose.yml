@@ -4,7 +4,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "4000:4000"
     environment:
       - NEXT_PUBLIC_HYPERFY_URL=http://hyperfy:4000
     depends_on:
@@ -17,7 +17,7 @@ services:
       context: ./hyperfy
       dockerfile: Dockerfile
     ports:
-      - "4000:4000"
+      - "3000:4000"
     environment:
       - PORT=4000
       - DOMAIN=${DOMAIN:-localhost}
