@@ -3,7 +3,7 @@ name: Build and Push agent-manager Image
 on:
   push:
     branches: [main]
-  workflow_dispatch:  # Run manually from GitHub UI if needed
+  workflow_dispatch:
 
 jobs:
   build:
@@ -16,14 +16,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
-          fetch-depth: 0  # Full history helps with cache
+          submodules: false  # Skip automatic submodule init
 
-      - name: Debug context (for troubleshooting)
+      - name: Manually init and update submodules
+        run: |
+          git submodule sync --recursive
+          git config --global url."git://github.com/".insteadOf "https://github.com/"  # Use git:// for anonymous clone (no auth prompt)
+          git submodule update --init --recursive --force
+
+      - name: Debug context
         run: |
           ls -la .
-          ls -la agent-manager || echo "agent-manager folder missing!"
-          ls -la agent-manager/src || echo "src folder missing or empty!"
+          ls -la agent-manager || echo "agent-manager missing!"
+          ls -la agent-manager/src || echo "src missing or empty!"
           ls -la agent-manager/src/*.js 2>/dev/null || echo "No JS files found in src"
           cat agent-manager/package.json || echo "package.json not found"
 
@@ -44,6 +49,5 @@ jobs:
           file: ./agent-manager/Dockerfile
           push: true
           tags: ghcr.io/anentrypoint/agent-manager:latest
-          no-cache: false  # Use cache if available; set true for force clean build
           cache-from: type=gha
           cache-to: type=gha,mode=max
