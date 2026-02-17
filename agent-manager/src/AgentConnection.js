@@ -1,3 +1,5 @@
+import { WebSocket } from 'ws';
+
 // Simple EventEmitter polyfill (since we removed the Hyperfy client)
 class EventEmitter {
   constructor() {
