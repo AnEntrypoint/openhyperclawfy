@@ -1,4 +1,4 @@
-name: Build and Push agent-manager 
+name: Build and Push agent-manager Image (Multi-Arch)
 
 on:
   push:
