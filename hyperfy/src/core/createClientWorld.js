@@ -1,0 +1,62 @@
+import { World } from './World.js'
+
+import { Client } from './systems/Client'
+import { ClientLiveKit } from './systems/ClientLiveKit'
+import { ClientPointer } from './systems/ClientPointer'
+import { ClientPrefs } from './systems/ClientPrefs'
+import { ClientControls } from './systems/ClientControls'
+import { ClientCameraControls } from './systems/ClientCameraControls'
+import { ClientNetwork } from './systems/ClientNetwork'
+import { ClientLoader } from './systems/ClientLoader'
+import { ClientCSS } from './systems/ClientCSS'
+import { ClientGraphics } from './systems/ClientGraphics'
+import { ClientEnvironment } from './systems/ClientEnvironment'
+import { ClientAudio } from './systems/ClientAudio'
+import { ClientStats } from './systems/ClientStats'
+import { ClientBuilder } from './systems/ClientBuilder'
+import { ClientActions } from './systems/ClientActions'
+import { ClientTarget } from './systems/ClientTarget'
+import { ClientUI } from './systems/ClientUI'
+import { ClientWeb3 } from './systems/ClientWeb3'
+import { LODs } from './systems/LODs'
+import { Nametags } from './systems/Nametags'
+import { Particles } from './systems/Particles'
+import { Snaps } from './systems/Snaps'
+import { Wind } from './systems/Wind'
+import { XR } from './systems/XR'
+import { ClientAI } from './systems/ClientAI'
+import { EVM } from './systems/EVMClient'
+import { AudioReactivity } from './systems/AudioReactivity'
+
+export function createClientWorld() {
+  const world = new World()
+  world.register('client', Client)
+  world.register('livekit', ClientLiveKit)
+  world.register('pointer', ClientPointer)
+  world.register('prefs', ClientPrefs)
+  world.register('controls', ClientControls)
+  world.register('cameraControls', ClientCameraControls)
+  world.register('network', ClientNetwork)
+  world.register('loader', ClientLoader)
+  world.register('css', ClientCSS)
+  world.register('graphics', ClientGraphics)
+  world.register('environment', ClientEnvironment)
+  world.register('audio', ClientAudio)
+  world.register('stats', ClientStats)
+  world.register('builder', ClientBuilder)
+  world.register('actions', ClientActions)
+  world.register('target', ClientTarget)
+  world.register('ui', ClientUI)
+  world.register('web3', ClientWeb3)
+  world.register('lods', LODs)
+  world.register('nametags', Nametags)
+  world.register('particles', Particles)
+  world.register('snaps', Snaps)
+  world.register('wind', Wind)
+  world.register('xr', XR)
+  world.register('ai', ClientAI)
+  world.register('evm', EVM)
+  world.register('audioReactivity', AudioReactivity)
+
+  return world
+}
