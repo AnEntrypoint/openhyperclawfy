@@ -943,10 +943,29 @@ function sendError(ws, code, message) {
 // ---------------------------------------------------------------------------
 // WebSocket connection handler
 // ---------------------------------------------------------------------------
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  console.log('New WebSocket connection from:', req.socket.remoteAddress)
   let agentId = null
 
   ws.on('message', async (raw, isBinary) => {
+    console.log('Received message, isBinary:', isBinary, 'size:', raw.length)
+    // Track activity for inactivity timeout
+    if (agentId) {
+      const session = agentSessions.get(agentId)
+      if (session) session.lastActivity = Date.now()
+    }
+
+    // Log message type for debugging
+    if (!isBinary) {
+      try {
+        const msg = JSON.parse(raw)
+        console.log('WS message type:', msg.type)
+      } catch (e) {
+        console.log('WS text message (not JSON):', raw.toString().slice(0, 100))
+      }
+    }
+
+    // Handle binary frames (audio streaming)
     // Track activity for inactivity timeout
     if (agentId) {
       const session = agentSessions.get(agentId)
@@ -1544,7 +1563,8 @@ wss.on('connection', (ws) => {
     }
   })
 
-  ws.on('close', () => {
+  ws.on('close', (code, reason) => {
+    console.log('WS closed - agentId:', agentId, 'code:', code, 'reason:', reason?.toString())
     if (agentId) {
       destroySession(agentId)
       agentId = null
@@ -1552,7 +1572,7 @@ wss.on('connection', (ws) => {
   })
 
   ws.on('error', (err) => {
-    console.error('WebSocket error:', err.message)
+    console.error('WS error - agentId:', agentId, 'error:', err.message)
     if (agentId) {
       destroySession(agentId)
       agentId = null
