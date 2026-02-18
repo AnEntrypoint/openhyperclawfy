@@ -1,4 +1,5 @@
 import { WebSocket } from 'ws';
+global.WebSocket = WebSocket;
 
 // Simple EventEmitter polyfill (since we removed the Hyperfy client)
 class EventEmitter {
