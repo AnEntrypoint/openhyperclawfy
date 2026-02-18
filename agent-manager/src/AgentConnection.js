@@ -134,6 +134,11 @@ export class AgentConnection {
 
       this.ws.onmessage = (event) => {
         try {
+          // Skip binary messages (like position updates from Hyperfy)
+          if (typeof event.data !== 'string') {
+            return;
+          }
+
           const data = JSON.parse(event.data);
 
           // Handle chat messages
@@ -150,7 +155,10 @@ export class AgentConnection {
 
           // Optional: handle other message types (position updates, etc.)
         } catch (err) {
-          console.error('Invalid WS message:', err);
+          // Only log if it was a string message that failed to parse
+          if (typeof event.data === 'string') {
+            console.error('Invalid WS message:', err.message);
+          }
         }
       };
 
